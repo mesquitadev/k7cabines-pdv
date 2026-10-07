@@ -1,0 +1,259 @@
+{
+  "formato": 1,
+  "exportado_em": "2026-09-04T13:09:11.425792+00:00",
+  "origem_instalacao": "719feefa0340de152b1dbd4e25eb5afe",
+  "origem_loja": "",
+  "produtos": [
+    {
+      "code": "111112252445",
+      "name": "Teste 24/08",
+      "category": "Produtos eróticos",
+      "subcategory": "",
+      "price_cents": 1000,
+      "cost_cents": 0,
+      "barcode": null,
+      "min_stock": 0
+    },
+    {
+      "code": "123",
+      "name": "Pulseira K7",
+      "category": "Pulseiras",
+      "subcategory": "",
+      "price_cents": 3000,
+      "cost_cents": 0,
+      "barcode": null,
+      "min_stock": 0
+    },
+    {
+      "code": "125",
+      "name": "Indollor - gel dessensibilizante",
+      "category": "Produtos eróticos",
+      "subcategory": "",
+      "price_cents": 3000,
+      "cost_cents": 0,
+      "barcode": null,
+      "min_stock": 0
+    },
+    {
+      "code": "211151",
+      "name": "Halls",
+      "category": "Produtos eróticos",
+      "subcategory": "",
+      "price_cents": 300,
+      "cost_cents": 0,
+      "barcode": null,
+      "min_stock": 0
+    },
+    {
+      "code": "2112121",
+      "name": "Red Bull",
+      "category": "Bebidas",
+      "subcategory": "Red Bull",
+      "price_cents": 1500,
+      "cost_cents": 0,
+      "barcode": null,
+      "min_stock": 0
+    },
+    {
+      "code": "212100",
+      "name": "Coca-cola",
+      "category": "Bebidas",
+      "subcategory": "Refrigerante",
+      "price_cents": 700,
+      "cost_cents": 0,
+      "barcode": null,
+      "min_stock": 0
+    },
+    {
+      "code": "21231",
+      "name": "Heineken",
+      "category": "Bebidas",
+      "subcategory": "Heineken",
+      "price_cents": 1200,
+      "cost_cents": 0,
+      "barcode": null,
+      "min_stock": 0
+    },
+    {
+      "code": "21231212",
+      "name": "Skol beats",
+      "category": "Bebidas",
+      "subcategory": "Skol Beats",
+      "price_cents": 1200,
+      "cost_cents": 0,
+      "barcode": null,
+      "min_stock": 0
+    },
+    {
+      "code": "21255",
+      "name": "Tesão na Raba - gel dessensibilisante",
+      "category": "Produtos eróticos",
+      "subcategory": "",
+      "price_cents": 2500,
+      "cost_cents": 0,
+      "barcode": null,
+      "min_stock": 0
+    },
+    {
+      "code": "2131321d8516",
+      "name": "bebida teste",
+      "category": "Bebidas",
+      "subcategory": "",
+      "price_cents": 1000,
+      "cost_cents": 0,
+      "barcode": null,
+      "min_stock": 0
+    },
+    {
+      "code": "2132",
+      "name": "Água SEM Gás",
+      "category": "Bebidas",
+      "subcategory": "Água S/ Gás",
+      "price_cents": 300,
+      "cost_cents": 0,
+      "barcode": null,
+      "min_stock": 0
+    },
+    {
+      "code": "213222",
+      "name": "Água COM Gás",
+      "category": "Bebidas",
+      "subcategory": "Água C/ Gás",
+      "price_cents": 400,
+      "cost_cents": 0,
+      "barcode": null,
+      "min_stock": 0
+    },
+    {
+      "code": "22220",
+      "name": "Volumão",
+      "category": "Produtos eróticos",
+      "subcategory": "",
+      "price_cents": 3500,
+      "cost_cents": 0,
+      "barcode": null,
+      "min_stock": 0
+    },
+    {
+      "code": "236",
+      "name": "Refri Zero",
+      "category": "Bebidas",
+      "subcategory": "Refri Zero",
+      "price_cents": 700,
+      "cost_cents": 0,
+      "barcode": null,
+      "min_stock": 0
+    },
+    {
+      "code": "258",
+      "name": "Brahma Latão",
+      "category": "Bebidas",
+      "subcategory": "Brahma",
+      "price_cents": 1000,
+      "cost_cents": 0,
+      "barcode": null,
+      "min_stock": 0
+    },
+    {
+      "code": "333",
+      "name": "Antarctica Latão",
+      "category": "Bebidas",
+      "subcategory": "Antarctica",
+      "price_cents": 1000,
+      "cost_cents": 0,
+      "barcode": null,
+      "min_stock": 0
+    }
+  ],
+  "cupom": {
+    "fiscal_label": "NÃO É DOCUMENTO FISCAL",
+    "footer_message": "Obrigado pela preferência!",
+    "show_chapelaria": true,
+    "chapelaria_label": "NÚMERO DO PEDIDO",
+    "show_datetime": true,
+    "show_operator": true,
+    "operator_label": "Atendente"
+  },
+  "papeis": [
+    {
+      "key": "atendente",
+      "name": "Atendente",
+      "description": "Opera o caixa.",
+      "is_system": true,
+      "is_master": false,
+      "permissions": [
+        "cash.operate",
+        "pdv.use",
+        "reports.categories",
+        "reports.hourly",
+        "reports.sales",
+        "reports.view",
+        "stock.view"
+      ]
+    },
+    {
+      "key": "gerente",
+      "name": "Gerente",
+      "description": "Opera e administra a loja, sem gerir contas do sistema.",
+      "is_system": true,
+      "is_master": false,
+      "permissions": [
+        "backup.manage",
+        "cash.manage",
+        "cash.operate",
+        "pdv.use",
+        "printer.manage",
+        "reports.categories",
+        "reports.closing",
+        "reports.hourly",
+        "reports.sales",
+        "reports.stock",
+        "reports.view",
+        "sale.discount",
+        "sale.return",
+        "stock.add",
+        "stock.batches",
+        "stock.create",
+        "stock.delete",
+        "stock.edit",
+        "stock.inventory",
+        "stock.remove",
+        "stock.view"
+      ]
+    },
+    {
+      "key": "master",
+      "name": "Master",
+      "description": "Administra contas, permissões, backup e configuração. Tem tudo, sempre.",
+      "is_system": true,
+      "is_master": true,
+      "permissions": []
+    },
+    {
+      "key": "supervisor",
+      "name": "Supervisor",
+      "description": "Caixa, estoque e relatórios. Não exclui produto nem fecha caixa.",
+      "is_system": true,
+      "is_master": false,
+      "permissions": [
+        "cash.operate",
+        "pdv.use",
+        "reports.categories",
+        "reports.closing",
+        "reports.hourly",
+        "reports.sales",
+        "reports.stock",
+        "reports.view",
+        "sale.discount",
+        "stock.add",
+        "stock.batches",
+        "stock.create",
+        "stock.edit",
+        "stock.inventory",
+        "stock.remove",
+        "stock.view"
+      ]
+    }
+  ],
+  "usuarios": []
+}

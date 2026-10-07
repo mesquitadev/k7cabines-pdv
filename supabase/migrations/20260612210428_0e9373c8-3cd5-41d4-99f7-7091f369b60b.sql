@@ -1,0 +1,1 @@
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS access_rel_hora boolean NOT NULL DEFAULT true;

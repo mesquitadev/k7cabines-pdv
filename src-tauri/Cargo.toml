@@ -1,0 +1,30 @@
+[package]
+name = "k7-cabines"
+version = "0.2.0"
+description = "K7 Cabines desktop offline"
+authors = ["Dizevolv"]
+edition = "2021"
+
+[lib]
+name = "k7_cabines_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+argon2 = "0.5"
+chrono = { version = "0.4", features = ["serde"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+thiserror = "2"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4", "serde"] }
+tauri-plugin-dialog = "2.7.3"
+toml = "1.1.5"
+
+[dev-dependencies]
+tempfile = "3"

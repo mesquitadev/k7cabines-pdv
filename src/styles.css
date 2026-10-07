@@ -1,0 +1,492 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ============================================================
+   K7 Cabines — Placa de Embarque
+   Sinalização de plataforma: placa esmaltada, grade rígida,
+   cor de linha como único código cromático, numerais tabulares.
+   ============================================================ */
+
+@font-face {
+  font-family: "Barlow";
+  src: url("/fonts/Barlow-400.woff2") format("woff2");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Barlow";
+  src: url("/fonts/Barlow-500.woff2") format("woff2");
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Barlow";
+  src: url("/fonts/Barlow-600.woff2") format("woff2");
+  font-weight: 600; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Barlow";
+  src: url("/fonts/Barlow-700.woff2") format("woff2");
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Barlow Condensed";
+  src: url("/fonts/BarlowCondensed-500.woff2") format("woff2");
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Barlow Condensed";
+  src: url("/fonts/BarlowCondensed-600.woff2") format("woff2");
+  font-weight: 600; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Barlow Condensed";
+  src: url("/fonts/BarlowCondensed-700.woff2") format("woff2");
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+
+@theme inline {
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --radius-xl: 4px;
+  --radius-2xl: 6px;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --font-display: "Barlow Condensed", "Barlow", system-ui, sans-serif;
+  --font-sans: "Barlow", system-ui, sans-serif;
+
+  /* Cores de linha — o único código cromático do sistema */
+  --color-linha-pulseira: var(--linha-pulseira);
+  --color-linha-bebida: var(--linha-bebida);
+  --color-linha-erotico: var(--linha-erotico);
+  --color-linha-outro: var(--linha-outro);
+}
+
+:root {
+  --radius: 3px;
+
+  /*
+   * Grafite quente: o chão vem da marca da loja, não de um mundo inventado.
+   * O tom carrega um resto de vermelho nos escuros, para o vermelho K7
+   * pertencer à tela em vez de flutuar sobre um azul frio.
+   */
+  --background: oklch(0.17 0.012 40);
+  --foreground: oklch(0.96 0.006 60);
+  --card: oklch(0.225 0.014 40);
+  --card-foreground: oklch(0.96 0.006 60);
+  --popover: oklch(0.21 0.014 40);
+  --popover-foreground: oklch(0.96 0.006 60);
+
+  /* Vermelho K7: a ação principal e a identidade, sempre preenchido. */
+  --primary: oklch(0.58 0.225 27);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.27 0.016 40);
+  --secondary-foreground: oklch(0.96 0.006 60);
+  --muted: oklch(0.26 0.014 40);
+  /* Secundário tingido do próprio grafite, nunca cinza neutro. */
+  --muted-foreground: oklch(0.74 0.014 55);
+  --accent: oklch(0.3 0.02 40);
+  --accent-foreground: oklch(0.96 0.006 60);
+
+  --success: oklch(0.72 0.17 150);
+  --success-foreground: oklch(0.16 0.012 40);
+  --warning: oklch(0.79 0.15 70);
+  --warning-foreground: oklch(0.16 0.012 40);
+  --destructive: oklch(0.62 0.22 25);
+  --destructive-foreground: oklch(0.99 0 0);
+
+  --border: oklch(0.33 0.016 40);
+  --input: oklch(0.31 0.016 40);
+  --ring: oklch(0.72 0.13 240);
+
+  --sidebar: oklch(0.135 0.012 40);
+  --sidebar-foreground: oklch(0.96 0.006 60);
+  --sidebar-primary: oklch(0.58 0.225 27);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.24 0.016 40);
+  --sidebar-accent-foreground: oklch(0.96 0.006 60);
+  --sidebar-border: oklch(0.28 0.016 40);
+  --sidebar-ring: oklch(0.72 0.13 240);
+
+  /*
+   * Linhas de categoria. Nenhuma é vermelha: vermelho preenchido é ação,
+   * e uma cor não pode significar duas coisas.
+   */
+  --linha-pulseira: oklch(0.68 0.16 350);
+  --linha-bebida: oklch(0.7 0.13 210);
+  --linha-erotico: oklch(0.65 0.2 320);
+  --linha-outro: oklch(0.7 0.1 160);
+
+  --painel-muted: oklch(0.74 0.014 55);
+}
+
+@layer base {
+  * { border-color: var(--color-border); }
+
+  html {
+    /*
+     * Base da interface. O valor real vem do parâmetro `interface.fonte` e é
+     * escrito na raiz por `src/lib/fonte.ts` — a tela é lida em pé, a um braço
+     * de distância, por gente diferente a cada turno, então quem opera é que
+     * escolhe. Isto aqui é só o ponto de partida antes de o parâmetro chegar.
+     */
+    font-size: 115%;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    font-synthesis-weight: none;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /*
+   * Títulos usam a condensada, mas em caixa normal: a tela inteira em
+   * maiúscula cansa e achata a hierarquia. Caixa alta fica reservada aos
+   * rótulos curtos de sinalização (.rotulo).
+   */
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    letter-spacing: 0.005em;
+    font-weight: 700;
+    line-height: 1.1;
+  }
+
+  /* Todo número que representa dinheiro, quantidade ou hora é tabular. */
+  .num {
+    font-variant-numeric: tabular-nums lining-nums;
+    font-feature-settings: "tnum" 1, "lnum" 1;
+  }
+
+  /* Superfícies do navegador que ninguém desenha, e que entregam o sistema. */
+  /* Seleção não pode usar o vermelho de ação: campo selecionado lia como erro. */
+  ::selection { background: oklch(0.42 0.03 250); color: oklch(0.99 0 0); }
+  ::placeholder { color: oklch(0.62 0.014 50); }
+  input, textarea { caret-color: var(--ring); }
+
+  * { scrollbar-width: thin; scrollbar-color: oklch(0.38 0.018 40) transparent; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: oklch(0.38 0.018 40);
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background-color: oklch(0.48 0.02 40); background-clip: content-box; }
+
+  :focus-visible {
+    outline: 3px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /*
+   * Placa esmaltada de verdade: chapa de aço vitrificada.
+   * A textura é um raster real (public/textura/esmalte.png), tingido pela cor
+   * da placa — não gradiente, não bisel falso, não sombra difusa.
+   */
+  .placa {
+    position: relative;
+    background-color: oklch(0.235 0.016 40);
+    border: 1px solid oklch(0.35 0.018 40);
+    box-shadow: inset 0 0 0 1px oklch(0.14 0.012 40 / 0.9);
+  }
+
+  /*
+   * A textura de esmalte é material só na escala da placa de produto.
+   * Em painel grande ela lê como sujeira, então não sai daqui.
+   */
+  /* Pedido do cliente (24/09/2026): cinza chapado, sem textura, para leitura. */
+  .placa-produto {
+    background-color: oklch(0.26 0.008 40);
+  }
+
+  /* Placa de destaque: chapa maior, moldura mais grossa, rebites nos cantos. */
+  .placa-mestra {
+    border-width: 2px;
+    border-color: oklch(0.44 0.02 40);
+  }
+  .placa-mestra::before,
+  .placa-mestra::after {
+    content: "";
+    position: absolute;
+    top: 7px;
+    width: 5px;
+    height: 5px;
+    border-radius: 999px;
+    background: oklch(0.55 0.02 40);
+    box-shadow: inset 0 1px 0 oklch(0.85 0.01 60 / 0.6);
+  }
+  .placa-mestra::before { left: 7px; }
+  .placa-mestra::after { right: 7px; }
+
+  /* Trilho: a estrutura de suporte que segura as placas, como no perfil da estação. */
+  .trilho {
+    /* Pedido do cliente (24/09/2026): sem listras, cinza sólido para leitura. */
+    background: oklch(0.215 0.014 40);
+    border-top: 1px solid oklch(0.32 0.018 40);
+    border-bottom: 1px solid oklch(0.14 0.012 40);
+  }
+
+  /*
+   * Painel de horário: bloco impresso pregado sobre a placa. Ele é um objeto
+   * dentro do mundo escuro, nunca o chão da página.
+   */
+  .painel {
+    background: oklch(0.215 0.014 40);
+    color: var(--foreground);
+    border: 1px solid oklch(0.33 0.018 40);
+  }
+  .painel thead { background: oklch(0.185 0.014 40); }
+  .painel th {
+    font-family: var(--font-display);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    color: var(--muted-foreground);
+  }
+  .painel td, .painel th { border-color: oklch(0.3 0.016 40) !important; }
+  .painel tr:hover { background: oklch(0.26 0.016 40); }
+
+  /* Etiqueta de wayfinding: caixa alta condensada, pequena e espaçada. */
+  .rotulo {
+    font-family: var(--font-display);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+    line-height: 1;
+  }
+
+  /* Faixa de linha: barra sólida de categoria na aresta da placa. */
+  .faixa-linha {
+    height: 6px;
+    background: var(--linha, var(--linha-outro));
+  }
+
+  /*
+   * Ação de receber. O vermelho é cor de linha (Pulseiras) e de vencido;
+   * usá-lo também no botão faria uma cor significar três coisas.
+   */
+  /*
+   * Ação principal no vermelho da marca. Ele não conflita com categoria
+   * porque nenhuma linha é vermelha, e não conflita com alerta porque
+   * alerta é sempre contornado, com ícone e texto — nunca preenchido.
+   */
+  .acao-receber {
+    background: var(--primary);
+    color: var(--primary-foreground);
+    border: 1px solid color-mix(in oklab, var(--primary) 72%, black);
+  }
+  .acao-receber:hover:not(:disabled) {
+    background: color-mix(in oklab, var(--primary) 88%, white);
+  }
+
+  /*
+   * Campo de valor: precisa parecer editável. Fundo recuado, moldura visível
+   * e foco que muda a moldura, não só um anel externo.
+   */
+  .campo {
+    background: oklch(0.155 0.012 40);
+    border: 1px solid oklch(0.36 0.018 40);
+    color: var(--foreground);
+    transition: border-color 120ms ease, background-color 120ms ease;
+  }
+  .campo:hover:not(:disabled) { border-color: oklch(0.46 0.02 40); }
+  .campo:focus,
+  .campo:focus-visible {
+    border-color: var(--primary);
+    background: oklch(0.18 0.014 40);
+    outline: none;
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 25%, transparent);
+  }
+
+  /* Caixa de seleção desenhada: a nativa não pertence a design nenhum. */
+  .marcador {
+    appearance: none;
+    width: 1.35rem;
+    height: 1.35rem;
+    flex-shrink: 0;
+    border: 1px solid oklch(0.42 0.02 40);
+    background: oklch(0.155 0.012 40);
+    display: inline-grid;
+    place-content: center;
+    cursor: pointer;
+    transition: background-color 120ms ease, border-color 120ms ease;
+  }
+  .marcador::before {
+    content: "";
+    width: 0.7rem;
+    height: 0.7rem;
+    transform: scale(0);
+    transition: transform 120ms cubic-bezier(0.22, 1, 0.36, 1);
+    background: oklch(0.16 0.012 40);
+    clip-path: polygon(14% 46%, 0 60%, 39% 100%, 100% 22%, 86% 8%, 38% 71%);
+  }
+  .marcador:checked {
+    background: oklch(0.72 0.17 150);
+    border-color: oklch(0.72 0.17 150);
+  }
+  .marcador:checked::before { transform: scale(1); }
+  .marcador:hover:not(:checked) { border-color: oklch(0.55 0.02 40); }
+
+  /*
+   * Ação destrutiva é contornada, nunca preenchida. Preenchido de vermelho é
+   * a ação que se quer que aconteça; fechar o caixa e excluir não são isso.
+   */
+  .acao-destrutiva {
+    background: transparent;
+    color: var(--destructive);
+    border: 1px solid var(--destructive);
+  }
+  .acao-destrutiva:hover:not(:disabled) {
+    background: color-mix(in oklab, var(--destructive) 16%, transparent);
+  }
+
+  /*
+   * Sinal de pulseira: precisa ser visto de longe, inclusive pela câmera.
+   *
+   * A pulseira é o item que libera a cabine, então a conferência não é só do
+   * atendente — é do cliente, olhando o monitor, e do registro em vídeo. Por
+   * isso o aviso não é uma borda discreta: é uma faixa do tamanho da tela,
+   * em movimento, legível a metros de distância e num quadro de câmera de
+   * baixa resolução.
+   */
+  .sinal-pulseira {
+    position: relative;
+  }
+  .sinal-pulseira::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 40;
+    border: 10px solid var(--primary);
+    box-shadow:
+      inset 0 0 0 3px oklch(1 0 0 / 0.35),
+      inset 0 0 140px color-mix(in oklab, var(--primary) 34%, transparent);
+    animation: pulsar-pulseira 1.1s steps(1, end) infinite;
+  }
+
+  /* Pedido do cliente (24/09/2026): vermelho e branco, alternando. */
+  @keyframes pulsar-pulseira {
+    0%, 100% { border-color: var(--primary); }
+    50% { border-color: oklch(0.98 0 0); }
+  }
+
+  /*
+   * Faixa de anúncio. Fica no topo, ocupa a largura toda e usa corpo grande:
+   * é o elemento que a câmera registra e que o cliente lê do outro lado do
+   * balcão.
+   */
+  .anuncio-pulseira {
+    background: var(--primary);
+    color: oklch(0.98 0 0);
+    font-family: var(--font-display);
+    font-weight: 800;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-size: clamp(1.6rem, 3.4vw, 3rem);
+    line-height: 1;
+    padding: 0.5em 0.6em;
+    text-align: center;
+    animation: piscar-anuncio 1.1s steps(1, end) infinite;
+  }
+
+  /* Vermelho com letra branca, depois branco com letra vermelha. */
+  @keyframes piscar-anuncio {
+    0%, 100% {
+      background: var(--primary);
+      color: oklch(0.98 0 0);
+    }
+    50% {
+      background: oklch(0.98 0 0);
+      color: var(--primary);
+    }
+  }
+
+  /* Contador de pulseiras, ainda maior: é o número que o cliente confere. */
+  .anuncio-pulseira .quantas {
+    font-size: 1.35em;
+    margin-right: 0.35em;
+  }
+
+  /*
+   * Quem pediu menos movimento continua recebendo o aviso, parado. Suprimir a
+   * animação não pode suprimir a informação.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    .sinal-pulseira::after { animation: none; opacity: 0.95; }
+    .anuncio-pulseira { animation: none; }
+  }
+
+  /* Dígito de painel: a unidade do split-flap. */
+  .digito {
+    display: inline-block;
+    perspective: 220px;
+    transform-style: preserve-3d;
+    animation: virar-placa 140ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    transform-origin: 50% 100%;
+  }
+}
+
+@keyframes virar-placa {
+  from { transform: rotateX(-72deg); opacity: 0; }
+  to   { transform: rotateX(0deg); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .digito { animation: none; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Impressão do cupom: 80mm, alto contraste, sem herdar o mundo escuro. */
+@media print {
+  @page { size: 80mm auto; margin: 4mm; }
+  body * { visibility: hidden !important; }
+  .print-ticket, .print-ticket * { visibility: visible !important; }
+  .print-ticket {
+    position: absolute;
+    left: 0; top: 0;
+    width: 72mm;
+    font-family: "Barlow", "Helvetica Neue", Arial, sans-serif;
+    color: #000;
+    background: #fff;
+  }
+}

@@ -34,6 +34,11 @@ jobs:
       - name: Instalar dependências JS
         run: npm ci
 
+      # O package-lock foi gerado no macOS e não traz o binário nativo do
+      # Tauri CLI para Windows (bug conhecido do npm com optionalDependencies).
+      - name: Binário nativo do Tauri CLI para Windows
+        run: npm install --no-save @tauri-apps/cli-win32-x64-msvc@2.11.4
+
       - name: Empacotar (NSIS + MSI)
         run: npm run desktop:build:windows
         env:

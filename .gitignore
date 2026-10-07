@@ -44,3 +44,7 @@ tsconfig.tsbuildinfo
 .impeccable/
 .lovable/
 .workspace/
+
+# Gerenciador de pacotes: só npm (a esteira usa package-lock.json)
+bun.lock
+bunfig.toml

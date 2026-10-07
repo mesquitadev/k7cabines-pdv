@@ -5,8 +5,11 @@
 //! ou abrir a gaveta. Aqui o cupom vira bytes ESC/POS e vai direto para a fila
 //! da impressora escolhida.
 
+#[cfg(not(target_os = "windows"))]
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(not(target_os = "windows"))]
+use std::process::Stdio;
 
 use chrono::Utc;
 use rusqlite::{params, Connection};
@@ -201,35 +204,38 @@ pub fn salvar_config(
 }
 
 /// Manda os bytes para a fila de impressão do sistema.
+///
+/// No Windows o caminho confiável para dados brutos é escrever num arquivo
+/// temporário e copiá-lo para o compartilhamento da impressora. Nos demais
+/// sistemas o CUPS recebe pelo `lp -o raw`.
+#[cfg(target_os = "windows")]
 fn enviar(nome: &str, dados: &[u8]) -> AppResult<()> {
     let nome = nome_seguro(nome)?;
+    let temporario = std::env::temp_dir()
+        .join(format!("k7-cupom-{}.bin", Utc::now().timestamp_millis()));
+    std::fs::write(&temporario, dados)
+        .map_err(|e| AppError::Internal(format!("falha ao preparar a impressão: {e}")))?;
+    let saida = Command::new("cmd")
+        .args(["/C", "copy", "/B"])
+        .arg(&temporario)
+        .arg(format!("\\\\localhost\\{nome}"))
+        .output();
+    let _ = std::fs::remove_file(&temporario);
+    match saida {
+        Ok(r) if r.status.success() => Ok(()),
+        Ok(r) => Err(AppError::Internal(format!(
+            "a impressora recusou o trabalho: {}",
+            String::from_utf8_lossy(&r.stderr).trim()
+        ))),
+        Err(e) => Err(AppError::Internal(format!(
+            "não foi possível falar com a impressora: {e}"
+        ))),
+    }
+}
 
-    #[cfg(target_os = "windows")]
-    let mut processo = {
-        // No Windows o caminho confiável para dados brutos é escrever num
-        // arquivo temporário e copiá-lo para o dispositivo da impressora.
-        let temporario = std::env::temp_dir().join(format!("k7-cupom-{}.bin", Utc::now().timestamp_millis()));
-        std::fs::write(&temporario, dados)
-            .map_err(|e| AppError::Internal(format!("falha ao preparar a impressão: {e}")))?;
-        let saida = Command::new("cmd")
-            .args(["/C", "copy", "/B"])
-            .arg(&temporario)
-            .arg(format!("\\\\localhost\\{nome}"))
-            .output();
-        let _ = std::fs::remove_file(&temporario);
-        return match saida {
-            Ok(r) if r.status.success() => Ok(()),
-            Ok(r) => Err(AppError::Internal(format!(
-                "a impressora recusou o trabalho: {}",
-                String::from_utf8_lossy(&r.stderr).trim()
-            ))),
-            Err(e) => Err(AppError::Internal(format!(
-                "não foi possível falar com a impressora: {e}"
-            ))),
-        };
-    };
-
-    #[cfg(not(target_os = "windows"))]
+#[cfg(not(target_os = "windows"))]
+fn enviar(nome: &str, dados: &[u8]) -> AppResult<()> {
+    let nome = nome_seguro(nome)?;
     let mut processo = Command::new("lp")
         .args(["-d", nome, "-o", "raw"])
         .stdin(Stdio::piped())
@@ -241,26 +247,22 @@ fn enviar(nome: &str, dados: &[u8]) -> AppResult<()> {
                 "não foi possível falar com o sistema de impressão: {e}"
             ))
         })?;
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        processo
-            .stdin
-            .as_mut()
-            .ok_or_else(|| AppError::Internal("a fila de impressão não aceitou os dados".into()))?
-            .write_all(dados)
-            .map_err(|e| AppError::Internal(format!("falha ao enviar o cupom: {e}")))?;
-        let resultado = processo
-            .wait_with_output()
-            .map_err(|e| AppError::Internal(format!("a impressão não terminou: {e}")))?;
-        if !resultado.status.success() {
-            return Err(AppError::Internal(format!(
-                "a impressora recusou o trabalho: {}",
-                String::from_utf8_lossy(&resultado.stderr).trim()
-            )));
-        }
-        Ok(())
+    processo
+        .stdin
+        .as_mut()
+        .ok_or_else(|| AppError::Internal("a fila de impressão não aceitou os dados".into()))?
+        .write_all(dados)
+        .map_err(|e| AppError::Internal(format!("falha ao enviar o cupom: {e}")))?;
+    let resultado = processo
+        .wait_with_output()
+        .map_err(|e| AppError::Internal(format!("a impressão não terminou: {e}")))?;
+    if !resultado.status.success() {
+        return Err(AppError::Internal(format!(
+            "a impressora recusou o trabalho: {}",
+            String::from_utf8_lossy(&resultado.stderr).trim()
+        )));
     }
+    Ok(())
 }
 
 /// Monta o cupom de venda em ESC/POS.

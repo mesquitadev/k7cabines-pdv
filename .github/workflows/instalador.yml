@@ -23,9 +23,7 @@ jobs:
           - os: windows-latest
             nome: Windows
             bundles: nsis,msi
-          - os: macos-latest
-            nome: macOS
-            bundles: app,dmg
+          # macOS e Linux ficam de fora por ora: o macOS é gerado localmente.
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.nome }}
     steps:

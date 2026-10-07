@@ -182,7 +182,8 @@ pub fn salvar_config(
         "UPDATE printer_settings
          SET printer_name = ?1, paper_width_mm = ?2, columns = ?3, copies = ?4,
              feed_lines = ?5, cut_paper = ?6, open_drawer = ?7, mode = ?8,
-             codepage = ?9, updated_at = ?10
+             codepage = ?9, auto_print_sale = ?10, auto_print_credit = ?11,
+             credit_copies = ?12, updated_at = ?13
          WHERE id = 1",
         params![
             entrada.printer_name.trim(),
@@ -609,6 +610,32 @@ mod tests {
             auto_print_credit: true,
             credit_copies: 1,
         }
+    }
+
+    #[test]
+    fn salvar_config_grava_todos_os_campos_inclusive_impressao_automatica() {
+        // Regressão: o UPDATE tinha 10 marcadores e 13 valores, e o SQLite
+        // recusava — na loja aparecia como "falha de banco de dados" ao salvar
+        // a impressora. O teste salva e relê cada campo.
+        let c = crate::db::open_in_memory().unwrap();
+        let ator = LocalUser {
+            id: "u1".into(),
+            username: "g".into(),
+            full_name: "Gerente".into(),
+            whatsapp: None,
+            role: "gerente".into(),
+            permissions: vec!["printer.configure".into()],
+            must_change_password: false,
+        };
+        let mut entrada = config();
+        entrada.printer_name = "ELGIN i8".into();
+        entrada.auto_print_sale = false;
+        entrada.credit_copies = 2;
+        let salvo = salvar_config(&c, &ator, entrada).unwrap();
+        assert_eq!(salvo.printer_name, "ELGIN i8");
+        assert!(!salvo.auto_print_sale);
+        assert_eq!(salvo.credit_copies, 2);
+        assert_eq!(salvo.columns, 48);
     }
 
     fn venda() -> CompletedSale {

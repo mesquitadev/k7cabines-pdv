@@ -206,31 +206,75 @@ pub fn salvar_config(
 
 /// Manda os bytes para a fila de impressão do sistema.
 ///
-/// No Windows o caminho confiável para dados brutos é escrever num arquivo
-/// temporário e copiá-lo para o compartilhamento da impressora. Nos demais
-/// sistemas o CUPS recebe pelo `lp -o raw`.
+/// No Windows vai direto ao spooler, como documento RAW, em qualquer
+/// impressora instalada — sem exigir compartilhamento de rede (o `copy` para
+/// `\\localhost\nome` exigia, e na loja dava "nome da rede não encontrado").
+/// Nos demais sistemas o CUPS recebe pelo `lp -o raw`.
 #[cfg(target_os = "windows")]
 fn enviar(nome: &str, dados: &[u8]) -> AppResult<()> {
+    use windows_sys::Win32::Graphics::Printing::{
+        ClosePrinter, EndDocPrinter, EndPagePrinter, OpenPrinterW, StartDocPrinterW,
+        StartPagePrinter, WritePrinter, DOC_INFO_1W,
+    };
+
     let nome = nome_seguro(nome)?;
-    let temporario = std::env::temp_dir()
-        .join(format!("k7-cupom-{}.bin", Utc::now().timestamp_millis()));
-    std::fs::write(&temporario, dados)
-        .map_err(|e| AppError::Internal(format!("falha ao preparar a impressão: {e}")))?;
-    let saida = Command::new("cmd")
-        .args(["/C", "copy", "/B"])
-        .arg(&temporario)
-        .arg(format!("\\\\localhost\\{nome}"))
-        .output();
-    let _ = std::fs::remove_file(&temporario);
-    match saida {
-        Ok(r) if r.status.success() => Ok(()),
-        Ok(r) => Err(AppError::Internal(format!(
-            "a impressora recusou o trabalho: {}",
-            String::from_utf8_lossy(&r.stderr).trim()
-        ))),
-        Err(e) => Err(AppError::Internal(format!(
-            "não foi possível falar com a impressora: {e}"
-        ))),
+    // Strings UTF-16 terminadas em zero, como a API pede.
+    let wide = |texto: &str| -> Vec<u16> {
+        texto.encode_utf16().chain(std::iter::once(0)).collect()
+    };
+    let mut nome_w = wide(nome);
+    let mut doc_w = wide("K7Cabines cupom");
+    let mut raw_w = wide("RAW");
+
+    let erro = |contexto: &str| {
+        let codigo = std::io::Error::last_os_error();
+        AppError::Internal(format!("{contexto}: {codigo}"))
+    };
+
+    // SAFETY: chamadas diretas à API do spooler do Windows. Todos os ponteiros
+    // apontam para buffers locais vivos durante a chamada, e cada handle aberto
+    // é fechado antes de sair, inclusive nos caminhos de erro.
+    unsafe {
+        let mut handle: windows_sys::Win32::Foundation::HANDLE = std::ptr::null_mut();
+        if OpenPrinterW(nome_w.as_mut_ptr(), &mut handle, std::ptr::null_mut()) == 0 {
+            return Err(erro("impressora não encontrada no Windows"));
+        }
+
+        let info = DOC_INFO_1W {
+            pDocName: doc_w.as_mut_ptr(),
+            pOutputFile: std::ptr::null_mut(),
+            pDatatype: raw_w.as_mut_ptr(),
+        };
+        if StartDocPrinterW(handle, 1, &info) == 0 {
+            let e = erro("a fila de impressão recusou o documento");
+            ClosePrinter(handle);
+            return Err(e);
+        }
+        if StartPagePrinter(handle) == 0 {
+            let e = erro("a fila de impressão recusou a página");
+            EndDocPrinter(handle);
+            ClosePrinter(handle);
+            return Err(e);
+        }
+
+        let mut escritos: u32 = 0;
+        let ok = WritePrinter(
+            handle,
+            dados.as_ptr() as *const core::ffi::c_void,
+            dados.len() as u32,
+            &mut escritos,
+        );
+        let falha_escrita = ok == 0 || escritos as usize != dados.len();
+        let e = if falha_escrita { Some(erro("falha ao enviar o cupom")) } else { None };
+
+        EndPagePrinter(handle);
+        EndDocPrinter(handle);
+        ClosePrinter(handle);
+
+        match e {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 }
 

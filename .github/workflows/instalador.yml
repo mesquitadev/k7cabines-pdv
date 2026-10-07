@@ -23,7 +23,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -31,13 +30,14 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Instalar dependências JS
-        run: npm ci
-
-      # O package-lock foi gerado no macOS e não traz o binário nativo do
-      # Tauri CLI para Windows (bug conhecido do npm com optionalDependencies).
-      - name: Binário nativo do Tauri CLI para Windows
-        run: npm install --no-save @tauri-apps/cli-win32-x64-msvc@2.11.4
+      # O package-lock foi gerado no macOS e não traz os binários nativos do
+      # Windows (Tauri CLI, lightningcss, rollup...). Bug conhecido do npm com
+      # optionalDependencies: a saída é resolver a árvore de novo no Windows.
+      - name: Instalar dependências JS (resolvendo no Windows)
+        shell: pwsh
+        run: |
+          Remove-Item -Force package-lock.json
+          npm install --no-package-lock --no-audit --no-fund
 
       - name: Empacotar (NSIS + MSI)
         run: npm run desktop:build:windows

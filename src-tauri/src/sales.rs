@@ -192,13 +192,35 @@ pub fn finalize(
     }
     let total_cents = subtotal_cents - input.discount_cents;
 
+    // Pendência: leva agora, paga na retirada. Nada entra no caixa hoje; o
+    // valor fica em `pending_cents` até `credito::liquidar_pendencia`.
+    if input.pending {
+        if input.cash_tendered_cents != 0 || input.card_cents != 0 || input.pix_cents != 0 {
+            return Err(AppError::Validation(
+                "pendência não recebe pagamento agora: o cliente paga na retirada".into(),
+            ));
+        }
+        if em_credito.iter().any(|c| *c) {
+            return Err(AppError::Validation(
+                "um pedido é ficha ou pendência, não os dois".into(),
+            ));
+        }
+        require_permission(actor, "credit.sell")?;
+        if items.len() != 1 || items[0].quantity != 1 {
+            return Err(AppError::Validation(
+                "pendência é um item só: um produto, uma unidade por venda".into(),
+            ));
+        }
+    }
+    let pending_cents = if input.pending { total_cents } else { 0 };
+
     let paid_cents = input.cash_tendered_cents + input.card_cents + input.pix_cents;
     if input.card_cents + input.pix_cents > total_cents {
         return Err(AppError::Validation(
             "cartão e PIX somados não podem ultrapassar o total".into(),
         ));
     }
-    if paid_cents < total_cents {
+    if !input.pending && paid_cents < total_cents {
         return Err(AppError::Validation("valor pago insuficiente".into()));
     }
     let change_cents = if input.cash_tendered_cents > 0 {
@@ -206,7 +228,7 @@ pub fn finalize(
     } else {
         0
     };
-    if change_cents != paid_cents - total_cents {
+    if !input.pending && change_cents != paid_cents - total_cents {
         return Err(AppError::Validation(
             "pagamento inconsistente: troco só é possível em dinheiro".into(),
         ));
@@ -246,8 +268,9 @@ pub fn finalize(
         "INSERT INTO sales (id, client_sale_id, sale_number, business_date, status, total_cents,
                             cash_tendered_cents, card_cents, change_cents, operator_id,
                             operator_name, payload_hash, created_at, cash_session_id,
-                            subtotal_cents, pix_cents, discount_cents, discount_reason, customer_name)
-         VALUES (?1, ?2, ?3, ?4, 'completed', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                            subtotal_cents, pix_cents, discount_cents, discount_reason, customer_name,
+                            pending_cents)
+         VALUES (?1, ?2, ?3, ?4, 'completed', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
         params![
             sale_id,
             client_sale_id,
@@ -266,7 +289,8 @@ pub fn finalize(
             input.pix_cents,
             input.discount_cents,
             discount_reason,
-            customer_name
+            customer_name,
+            pending_cents
         ],
     ).map_err(|error| match error {
         rusqlite::Error::SqliteFailure(ref inner, _) if inner.extended_code == 2067 => {
@@ -276,8 +300,9 @@ pub fn finalize(
     })?;
 
     // Ficha: só existe quando algum item fica para retirar depois.
+    // Pendência: o mesmo papel, mas quem fica em aberto é o dinheiro.
     let tem_credito = em_credito.iter().any(|c| *c);
-    let voucher_id = if tem_credito {
+    let voucher_id = if tem_credito || input.pending {
         require_permission(actor, "credit.sell")?;
         // Ficha ao portador: um item por ficha — um produto, uma unidade, uma
         // venda. Quem quer duas cervejas faz duas vendas e recebe dois papéis:
@@ -299,10 +324,11 @@ pub fn finalize(
         }
         let id = Uuid::new_v4().to_string();
         let code = crate::credito::gerar_codigo(&transaction)?;
+        let kind = if input.pending { "pendencia" } else { "ficha" };
         transaction.execute(
-            "INSERT INTO credit_vouchers (id, sale_id, customer_name, created_at, code)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, sale_id, nome, now, code],
+            "INSERT INTO credit_vouchers (id, sale_id, customer_name, created_at, code, kind)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, sale_id, nome, now, code, kind],
         )?;
         Some(id)
     } else {
@@ -328,6 +354,24 @@ pub fn finalize(
                 custos[indice]
             ],
         )?;
+
+        // Pendência: a mercadoria vai com o cliente agora, então o item entra
+        // no papel já retirado e o estoque baixa abaixo como numa venda comum.
+        if input.pending {
+            transaction.execute(
+                "INSERT INTO credit_voucher_items
+                    (id, voucher_id, product_id, product_name, category, quantity, taken_quantity)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+                params![
+                    Uuid::new_v4().to_string(),
+                    voucher_id.as_ref().expect("pendência cria o papel"),
+                    item.product_id,
+                    item.product_name,
+                    item.category,
+                    item.quantity
+                ],
+            )?;
+        }
 
         // Item em crédito não baixa estoque agora: a mercadoria continua na
         // geladeira até o cliente vir buscar. A baixa acontece na retirada.
@@ -660,7 +704,7 @@ mod tests {
             card_cents: card,
             pix_cents: 0,
             discount_cents: 0, discount_reason: String::new(), customer_name: String::new(),
-            credit_customer: None,
+            credit_customer: None, pending: false,
         }
     }
 
@@ -810,7 +854,7 @@ mod tests {
             cash_tendered_cents: 0,
             card_cents: 0,
             pix_cents: 1000,
-            discount_cents: 0, discount_reason: String::new(), customer_name: String::new(), credit_customer: None,
+            discount_cents: 0, discount_reason: String::new(), customer_name: String::new(), credit_customer: None, pending: false,
         }).unwrap();
         assert_eq!(venda.total_cents, 1000);
         assert_eq!(venda.pix_cents, 1000);
@@ -836,7 +880,7 @@ mod tests {
             cash_tendered_cents: 1800,
             card_cents: 0,
             pix_cents: 0,
-            discount_cents: 200, discount_reason: "cliente fiel".into(), customer_name: String::new(), credit_customer: None,
+            discount_cents: 200, discount_reason: "cliente fiel".into(), customer_name: String::new(), credit_customer: None, pending: false,
         }).unwrap();
         assert_eq!(venda.subtotal_cents, 2000);
         assert_eq!(venda.discount_cents, 200);
@@ -850,7 +894,7 @@ mod tests {
             cash_tendered_cents: 400,
             card_cents: 0,
             pix_cents: 0,
-            discount_cents: 100, discount_reason: String::new(), customer_name: String::new(), credit_customer: None,
+            discount_cents: 100, discount_reason: String::new(), customer_name: String::new(), credit_customer: None, pending: false,
         });
         assert!(matches!(negado, Err(AppError::Validation(_))));
     }
@@ -867,7 +911,7 @@ mod tests {
             cash_tendered_cents: 0,
             card_cents: 0,
             pix_cents: 0,
-            discount_cents: 999_999, discount_reason: "teste".into(), customer_name: String::new(), credit_customer: None,
+            discount_cents: 999_999, discount_reason: "teste".into(), customer_name: String::new(), credit_customer: None, pending: false,
         });
         assert!(matches!(r, Err(AppError::Validation(_))));
     }

@@ -45,6 +45,8 @@ export interface LocalProduct {
   highlight: boolean;
   /** Efetivo: do produto OU da categoria. */
   highlight_effective: boolean;
+  /** Exige lote com data de validade nas entradas de estoque. */
+  tracks_expiry: boolean;
   stock_quantity: number;
   active: boolean;
   created_at: string;
@@ -59,6 +61,10 @@ export interface LocalCreditVoucher {
   customer_name: string;
   /** Código curto que identifica a ficha ao portador (impresso como K7-XXXX). */
   code: string;
+  /** "ficha" (pagou, retira depois) ou "pendencia" (levou, paga na retirada). */
+  kind: "ficha" | "pendencia";
+  /** Quanto ainda falta pagar; só pendência, zero quando quitada. */
+  pending_cents: number;
   created_at: string;
   settled_at: string | null;
   items: LocalCreditVoucherItem[];
@@ -214,6 +220,8 @@ export interface FinalizeSaleInput {
   customer_name?: string;
   /** Nome pelo qual a ficha será encontrada na retirada. */
   credit_customer?: string | null;
+  /** Pendência: leva agora, paga na retirada. Um item só; nada entra no caixa até pagar. */
+  pending?: boolean;
 }
 
 export interface CompletedSaleItem {
@@ -287,6 +295,11 @@ export interface ReportMovement {
   id: string; product_name: string; delta: number; reason: string;
   actor_name: string; occurred_at: string;
 }
+/** Item alterado (devolvido) no período. */
+export interface ReportReturn {
+  sale_number: number; product_name: string; quantity: number; amount_cents: number;
+  refund_kind: string; actor_name: string; reason: string; occurred_at: string;
+}
 export interface ReportDeletedSale {
   sale_number: number; total_cents: number; operator_name: string;
   deleted_by_name: string; reason: string; deleted_at: string;
@@ -348,6 +361,10 @@ export interface CashSession {
   expected_cash_cents: number | null;
   counted_cash_cents: number | null;
   difference_cents: number | null;
+  /** Maquininha: esperado pelas vendas, digitado do relatório da máquina, diferença. */
+  expected_card_cents: number | null;
+  counted_card_cents: number | null;
+  card_difference_cents: number | null;
   /** Encerrado sem contar a gaveta, na virada de dia. */
   closed_without_count?: boolean;
   notes: string | null;
@@ -367,6 +384,9 @@ export interface CashSessionSummary {
   deposits_cents: number;
   refunds_cash_cents: number;
   esperado_cents: number;
+  refunds_card_cents: number;
+  /** O que o relatório da maquininha deve mostrar. */
+  esperado_maquininha_cents: number;
 }
 
 export interface CashMovementInfo {
@@ -441,7 +461,7 @@ export const desktop = {
   listProducts: (token: string) => invoke<LocalProduct[]>("list_products", { token }),
   createProduct: (
     token: string,
-    input: { code: string; name: string; category: string; subcategory?: string; price_cents: number; cost_cents?: number; barcode?: string | null; min_stock?: number; category_id?: string | null; parent_id?: string | null; variant_name?: string; unit?: string; supplier_id?: string | null; highlight?: boolean },
+    input: { code: string; name: string; category: string; subcategory?: string; price_cents: number; cost_cents?: number; barcode?: string | null; min_stock?: number; category_id?: string | null; parent_id?: string | null; variant_name?: string; unit?: string; supplier_id?: string | null; highlight?: boolean; tracks_expiry?: boolean },
   ) => invoke<LocalProduct>("create_product", { token, input }),
   finalizeSale: (token: string, input: FinalizeSaleInput) =>
     invoke<CompletedSale>("finalize_sale", { token, input }),
@@ -450,7 +470,7 @@ export const desktop = {
   listBatches: (token: string) => invoke<LocalBatch[]>("list_batches", { token }),
   updateProduct: (
     token: string,
-    input: { id: string; code: string; name: string; category: string; subcategory?: string | null; price_cents: number; cost_cents?: number; barcode?: string | null; min_stock?: number; category_id?: string | null; parent_id?: string | null; variant_name?: string; unit?: string; supplier_id?: string | null; highlight?: boolean },
+    input: { id: string; code: string; name: string; category: string; subcategory?: string | null; price_cents: number; cost_cents?: number; barcode?: string | null; min_stock?: number; category_id?: string | null; parent_id?: string | null; variant_name?: string; unit?: string; supplier_id?: string | null; highlight?: boolean; tracks_expiry?: boolean },
   ) => invoke<LocalProduct>("update_product", { token, input }),
   deleteProduct: (token: string, productId: string) =>
     invoke<void>("delete_product", { token, productId }),
@@ -477,6 +497,8 @@ export const desktop = {
   reportSales: (token: string, range: ReportRange) => invoke<ReportSale[]>("report_sales", { token, range }),
   reportItems: (token: string, range: ReportRange) => invoke<ReportItem[]>("report_items", { token, range }),
   reportMovements: (token: string, range: ReportRange) => invoke<ReportMovement[]>("report_movements", { token, range }),
+  reportReturns: (token: string, range: ReportRange) =>
+    invoke<ReportReturn[]>("report_returns", { token, range }),
   reportDeletedSales: (token: string, range: ReportRange) =>
     invoke<ReportDeletedSale[]>("report_deleted_sales", { token, range }),
   deleteSale: (token: string, input: { sale_id: string; reason: string }) =>
@@ -505,8 +527,8 @@ export const desktop = {
     invoke<CashSessionSummary>("cash_summary", { token, sessionId }),
   cashMovements: (token: string, sessionId: string) =>
     invoke<CashMovementInfo[]>("cash_movements", { token, sessionId }),
-  cashClose: (token: string, countedCents: number, notes?: string | null) =>
-    invoke<CashSession>("cash_close", { token, countedCents, notes: notes ?? null }),
+  cashClose: (token: string, countedCents: number, countedCardCents: number, notes?: string | null) =>
+    invoke<CashSession>("cash_close", { token, countedCents, countedCardCents, notes: notes ?? null }),
 
   exportTemplate: (token: string, destino: string) =>
     invoke<string>("export_template", { token, destino }),
@@ -597,6 +619,10 @@ export const desktop = {
     token: string,
     input: { voucher_item_id: string; quantity: number; client_withdrawal_id?: string },
   ) => invoke<LocalCreditVoucher>("withdraw_credit", { token, input }),
+  settlePending: (
+    token: string,
+    input: { voucher_id: string; cash_cents: number; card_cents: number },
+  ) => invoke<LocalCreditVoucher>("settle_pending", { token, input }),
   printCreditVoucher: (token: string, saleId: string) =>
     invoke<boolean>("print_credit_voucher", { token, saleId }),
   reprintCreditVoucher: (token: string, voucherId: string) =>
@@ -621,7 +647,30 @@ export const desktop = {
 
 /** Token da sessão local, para adaptadores fora da árvore React. */
 export const DESKTOP_SESSION_KEY = "k7:desktop-session-token";
+/**
+ * O token vive em `sessionStorage`: sobrevive a um recarregar da tela (restaurar
+ * backup, reabrir o assistente) mas morre quando o aplicativo fecha. Fechar o
+ * programa sem sair é voltar pedindo senha — pedido da loja.
+ */
 export function desktopToken(): string | null {
-  if (typeof localStorage === "undefined") return null;
-  return localStorage.getItem(DESKTOP_SESSION_KEY);
+  try {
+    return sessionStorage.getItem(DESKTOP_SESSION_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function guardarDesktopToken(token: string | null): void {
+  try {
+    if (token) sessionStorage.setItem(DESKTOP_SESSION_KEY, token);
+    else sessionStorage.removeItem(DESKTOP_SESSION_KEY);
+  } catch {
+    /* sem armazenamento: a sessão vale só enquanto a tela está aberta */
+  }
+  // Instalações anteriores guardavam em localStorage; limpa para não voltar logado.
+  try {
+    localStorage.removeItem(DESKTOP_SESSION_KEY);
+  } catch {
+    /* sem localStorage */
+  }
 }

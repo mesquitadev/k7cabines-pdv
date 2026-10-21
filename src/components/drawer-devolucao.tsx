@@ -80,7 +80,7 @@ export function DrawerDevolucao({
     const token = desktopToken();
     if (!token || !alvo) return;
     if (!valida) return toast.error(`Quantidade inválida: há ${disponivel} a devolver`);
-    if (!motivo.trim()) return toast.error("Informe o motivo da devolução");
+    if (!motivo.trim()) return toast.error("Informe o motivo da alteração");
 
     setSalvando(true);
     try {
@@ -110,7 +110,7 @@ export function DrawerDevolucao({
       aberto={!!venda}
       onAbertoMudou={(a) => !a && onFechar()}
       icone={Undo2}
-      titulo="Devolver item"
+      titulo="Alterar pedido"
       descricao={
         venda && `Pedido ${String(venda.sale_number).padStart(5, "0")} · ${fmt(venda.total_cents)}`
       }
@@ -128,7 +128,7 @@ export function DrawerDevolucao({
             onClick={devolver}
             style={{ fontFamily: "var(--font-display)" }}
           >
-            {salvando ? "Devolvendo…" : `Devolver ${valorEstorno ? fmt(valorEstorno) : ""}`}
+            {salvando ? "Alterando…" : `Alterar ${valorEstorno ? `· estornar ${fmt(valorEstorno)}` : ""}`}
           </Button>
         </>
       }
@@ -136,7 +136,7 @@ export function DrawerDevolucao({
       <SecaoForm titulo="Item da venda">
         {itens.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">
-            Esta venda não tem itens disponíveis para devolução.
+            Este pedido não tem mais itens para remover.
           </p>
         ) : (
           <div className="painel divide-y divide-border overflow-hidden">
@@ -173,7 +173,7 @@ export function DrawerDevolucao({
       </SecaoForm>
 
       {alvo && (
-        <SecaoForm titulo="Devolução">
+        <SecaoForm titulo="Remover do pedido">
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="devQtd">Quantidade</Label>

@@ -2,7 +2,14 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { supabase } from "@/integrations/supabase/client";
 import type { Session, User } from "@supabase/supabase-js";
 import { sincronizarFonte } from "@/lib/fonte";
-import { desktop, isDesktop, type LocalSession, type LocalUser } from "@/lib/desktop";
+import {
+  desktop,
+  desktopToken,
+  guardarDesktopToken,
+  isDesktop,
+  type LocalSession,
+  type LocalUser,
+} from "@/lib/desktop";
 
 /**
  * Papel do usuário logado. Texto livre: os perfis são cadastrados na tela de
@@ -59,7 +66,6 @@ interface AuthCtx {
 }
 
 const Ctx = createContext<AuthCtx | null>(null);
-const DESKTOP_SESSION_KEY = "k7:desktop-session-token";
 
 function profileFromLocalUser(user: LocalUser): Profile {
   const has = (permission: string) => user.permissions.includes(permission);
@@ -126,9 +132,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const acceptLocalSession = (next: LocalSession) => {
     setPermissions(next.user.permissions);
-    // localStorage sobrevive ao fechamento do aplicativo; a validade de fato
-    // é controlada no Rust, que expira a sessão em 16 horas.
-    localStorage.setItem(DESKTOP_SESSION_KEY, next.token);
+    // sessionStorage: sobrevive ao recarregar, morre ao fechar o aplicativo.
+    guardarDesktopToken(next.token);
     setSession(next);
     setProfile(profileFromLocalUser(next.user));
     setPrecisaTrocarSenha(next.user.must_change_password);
@@ -139,14 +144,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (isDesktop()) {
-      const token = localStorage.getItem(DESKTOP_SESSION_KEY);
+      const token = desktopToken();
       if (!token) {
+        // Resíduo de versões que guardavam em localStorage: nunca restaurar.
+        guardarDesktopToken(null);
         setLoading(false);
         return;
       }
       desktop.currentSession(token)
         .then((localUser) => acceptLocalSession({ token, user: localUser }))
-        .catch(() => localStorage.removeItem(DESKTOP_SESSION_KEY))
+        .catch(() => guardarDesktopToken(null))
         .finally(() => setLoading(false));
       return;
     }
@@ -188,12 +195,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loading,
         signOut: async () => {
           if (isDesktop()) {
-            if (session && "token" in session) await desktop.logout(session.token);
-            localStorage.removeItem(DESKTOP_SESSION_KEY);
+            // Primeiro a tela sai do ar; só depois o Rust é avisado. Se o
+            // comando falhar ou demorar, a pessoa já está na tela de entrada
+            // em vez de presa num botão que não responde.
+            const token = session && "token" in session ? session.token : null;
+            guardarDesktopToken(null);
             setSession(null);
             setProfile(null);
+            setPermissions([]);
             setPrecisaTrocarSenha(false);
             setRole(null);
+            if (token) {
+              try {
+                await desktop.logout(token);
+              } catch {
+                /* a sessão já foi descartada na tela; o Rust expira a dele */
+              }
+            }
             return;
           }
           await supabase.auth.signOut();

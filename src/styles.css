@@ -438,6 +438,35 @@
     }
   }
 
+  /*
+   * Forma de pagamento com cor (pedido do cliente): verde só dinheiro,
+   * amarelo só maquininha, branco os dois. Vazio mostra só a borda na cor;
+   * ativo preenche. Corpo grande, para ler de longe.
+   */
+  .forma-pagamento {
+    --forma: var(--border);
+    --forma-texto: oklch(0.16 0.012 40);
+    min-height: 3.5rem;
+    border: 3px solid var(--forma);
+    background: transparent;
+    color: var(--color-foreground);
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 1rem;
+    line-height: 1.1;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 0.5rem 0.4rem;
+    border-radius: 0.125rem;
+    cursor: pointer;
+    transition: background-color 100ms, color 100ms;
+  }
+  .forma-pagamento:hover { background: color-mix(in oklab, var(--forma) 22%, transparent); }
+  .forma-pagamento.ativa { background: var(--forma); color: var(--forma-texto); }
+  .forma-dinheiro { --forma: var(--success); }
+  .forma-maquininha { --forma: var(--warning); }
+  .forma-mista { --forma: oklch(0.97 0 0); }
+
   /* Contador de pulseiras, ainda maior: é o número que o cliente confere. */
   .anuncio-pulseira .quantas {
     font-size: 1.35em;

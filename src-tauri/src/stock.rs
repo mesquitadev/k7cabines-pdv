@@ -10,10 +10,29 @@ use crate::{
 
 const MAX_QUANTITY: i64 = 100_000;
 
-/// Regra do negócio: toda categoria exige controle de validade por lote,
-/// exceto Pulseiras.
+/// Regra do negócio: a categoria Pulseiras nunca controla validade. Nas
+/// demais, quem decide é o próprio produto (`tracks_expiry`) — nem todo
+/// produto erótico tem data de validade.
 pub fn requires_expiry(category: &str) -> bool {
     !normalize(category).contains("pulseira")
+}
+
+/// Combina a regra da categoria com o flag do produto.
+pub fn tracks_expiry_for(category: &str, flag: bool) -> bool {
+    flag && requires_expiry(category)
+}
+
+/// Controle de validade efetivo do produto, lido do banco.
+fn product_tracks_expiry(transaction: &Transaction<'_>, product_id: &str) -> AppResult<bool> {
+    let (category, flag): (String, bool) = transaction
+        .query_row(
+            "SELECT category, tracks_expiry FROM products WHERE id = ?1 AND active = 1",
+            params![product_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?
+        .ok_or(AppError::NotFound)?;
+    Ok(tracks_expiry_for(&category, flag))
 }
 
 fn normalize(value: &str) -> String {
@@ -232,13 +251,13 @@ pub fn update_product(
              SET code = ?1, name = ?2, category = ?3, subcategory = ?4, price_cents = ?5,
                  cost_cents = ?6, barcode = ?7, min_stock = ?8, category_id = ?9,
                  parent_id = ?10, variant_name = ?11, unit = ?12, supplier_id = ?13,
-                 highlight = ?16,
+                 highlight = ?16, tracks_expiry = ?17,
                  revision = revision + 1, updated_at = ?14
              WHERE id = ?15 AND active = 1",
             params![code, name, category, subcategory, input.price_cents, input.cost_cents,
                     barcode, input.min_stock, input.category_id, input.parent_id,
                     input.variant_name.trim(), unit, input.supplier_id, now, input.id,
-                    input.highlight],
+                    input.highlight, tracks_expiry_for(&category, input.tracks_expiry)],
         )
         .map_err(|error| match error {
             rusqlite::Error::SqliteFailure(ref inner, _) if inner.extended_code == 2067 => {
@@ -304,15 +323,15 @@ pub fn add_stock(
     let now = Utc::now().to_rfc3339();
 
     let transaction = connection.transaction()?;
-    let (category, _) = product_category(&transaction, &input.product_id)?;
+    let _ = product_category(&transaction, &input.product_id)?;
 
     let expiry = match input.expiry_date.as_deref().map(str::trim) {
         Some(value) if !value.is_empty() => Some(validate_expiry(value)?),
         _ => None,
     };
-    if requires_expiry(&category) && expiry.is_none() {
+    if product_tracks_expiry(&transaction, &input.product_id)? && expiry.is_none() {
         return Err(AppError::Validation(
-            "data de validade obrigatória para esta categoria".into(),
+            "data de validade obrigatória para este produto".into(),
         ));
     }
 
@@ -586,6 +605,25 @@ mod tests {
     }
 
     #[test]
+    fn produto_sem_controle_de_validade_entra_sem_lote() {
+        let mut c = db::open_in_memory().unwrap();
+        seed(&c);
+        c.execute(
+            "INSERT INTO products (id, code, name, category, subcategory, price_cents, stock_quantity, active, tracks_expiry, created_at, updated_at)
+             VALUES ('p-gel', 'G1', 'Gel', 'Produtos eróticos', '', 2500, 0, 1, 0, 'now', 'now')",
+            [],
+        ).unwrap();
+        add_stock(&mut c, &full(), AddStockInput { product_id: "p-gel".into(), quantity: 3, expiry_date: None, unit_cost_cents: None, note: None, supplier_id: None }).unwrap();
+        assert_eq!(stock_of(&c, "p-gel"), 3);
+        assert!(list_batches(&c).unwrap().is_empty(), "sem validade, sem lote");
+
+        // Pulseira nunca controla, mesmo com o flag ligado.
+        assert!(!tracks_expiry_for("Pulseiras", true));
+        assert!(tracks_expiry_for("Produtos eróticos", true));
+        assert!(!tracks_expiry_for("Produtos eróticos", false));
+    }
+
+    #[test]
     fn adiciona_estoque_criando_e_reaproveitando_lote() {
         let mut c = db::open_in_memory().unwrap();
         seed(&c);
@@ -683,6 +721,7 @@ mod tests {
         seed(&c);
         let p = update_product(&mut c, &full(), UpdateProductInput {
             highlight: false,
+            tracks_expiry: true,
             id: "p-bebida".into(), code: "b9".into(), name: "Coca 600ml".into(),
             category: "Bebidas".into(), subcategory: None, price_cents: 800, cost_cents: 0, barcode: None, min_stock: 0, category_id: None, parent_id: None, variant_name: String::new(), unit: String::new(), supplier_id: None,
         }).unwrap();
@@ -691,6 +730,7 @@ mod tests {
 
         let duplicado = update_product(&mut c, &full(), UpdateProductInput {
             highlight: false,
+            tracks_expiry: true,
             id: "p-k7".into(), code: "B9".into(), name: "Pulseira K7".into(),
             category: "Pulseiras".into(), subcategory: None, price_cents: 3000, cost_cents: 0, barcode: None, min_stock: 0, category_id: None, parent_id: None, variant_name: String::new(), unit: String::new(), supplier_id: None,
         });
@@ -704,6 +744,7 @@ mod tests {
 
         let p = update_product(&mut c, &full(), UpdateProductInput {
             highlight: false,
+            tracks_expiry: true,
             id: "p-bebida".into(),
             code: "B1".into(),
             name: "Coca-cola".into(),
@@ -726,6 +767,7 @@ mod tests {
         // vários produtos sem EAN.
         let sem_ean = update_product(&mut c, &full(), UpdateProductInput {
             highlight: false,
+            tracks_expiry: true,
             id: "p-k7".into(), code: "K7".into(), name: "Pulseira K7".into(),
             category: "Pulseiras".into(), subcategory: None, price_cents: 3000,
             cost_cents: 0, barcode: Some("   ".into()), min_stock: 0, category_id: None, parent_id: None, variant_name: String::new(), unit: String::new(), supplier_id: None,
@@ -798,6 +840,7 @@ mod tests {
         seed(&c);
         update_product(&mut c, &full(), UpdateProductInput {
             highlight: false,
+            tracks_expiry: true,
             id: "p-bebida".into(), code: "B1".into(), name: "Coca".into(),
             category: "Bebidas".into(), subcategory: None, price_cents: 700,
             cost_cents: 0, barcode: Some("0123456789012".into()), min_stock: 0, category_id: None, parent_id: None, variant_name: String::new(), unit: String::new(), supplier_id: None,
@@ -805,6 +848,7 @@ mod tests {
 
         let duplicado = update_product(&mut c, &full(), UpdateProductInput {
             highlight: false,
+            tracks_expiry: true,
             id: "p-k7".into(), code: "K7".into(), name: "Pulseira K7".into(),
             category: "Pulseiras".into(), subcategory: None, price_cents: 3000,
             cost_cents: 0, barcode: Some("0123456789012".into()), min_stock: 0, category_id: None, parent_id: None, variant_name: String::new(), unit: String::new(), supplier_id: None,
@@ -820,6 +864,7 @@ mod tests {
         // p-k7 vira variação de p-bebida: um nível, permitido.
         let base = UpdateProductInput {
             highlight: false,
+            tracks_expiry: true,
             id: "p-k7".into(), code: "K7".into(), name: "Pulseira K7".into(),
             category: "Pulseiras".into(), subcategory: None, price_cents: 3000,
             cost_cents: 0, barcode: None, min_stock: 0,
@@ -834,6 +879,7 @@ mod tests {
              VALUES ('p-x','X1','Outro','Bebidas','',100,0,1,'now','now')", []).unwrap();
         let neta = update_product(&mut c, &full(), UpdateProductInput {
             highlight: false,
+            tracks_expiry: true,
             id: "p-x".into(), code: "X1".into(), name: "Outro".into(),
             category: "Bebidas".into(), subcategory: None, price_cents: 100,
             cost_cents: 0, barcode: None, min_stock: 0,
@@ -844,6 +890,7 @@ mod tests {
         // Ser variação de si mesmo também.
         let propria = update_product(&mut c, &full(), UpdateProductInput {
             highlight: false,
+            tracks_expiry: true,
             id: "p-x".into(), code: "X1".into(), name: "Outro".into(),
             category: "Bebidas".into(), subcategory: None, price_cents: 100,
             cost_cents: 0, barcode: None, min_stock: 0,
@@ -867,6 +914,7 @@ mod tests {
         assert!(matches!(delete_batch(&mut c, &sem, "qualquer"), Err(AppError::Forbidden)));
         assert!(matches!(update_product(&mut c, &sem, UpdateProductInput {
             highlight: false,
+            tracks_expiry: true,
             id: "p-k7".into(), code: "K7".into(), name: "Pulseira K7".into(),
             category: "Pulseiras".into(), subcategory: None, price_cents: 3000, cost_cents: 0, barcode: None, min_stock: 0, category_id: None, parent_id: None, variant_name: String::new(), unit: String::new(), supplier_id: None,
         }), Err(AppError::Forbidden)));

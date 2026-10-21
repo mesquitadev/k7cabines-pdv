@@ -11,6 +11,15 @@ import { ExpiryAlert } from "@/components/expiry-alert";
 import { PendingSalesSync } from "@/components/pending-sales-sync";
 import { fetchTicketSettings } from "@/lib/ticket-settings";
 import { desktop, isDesktop, type SetupStatus } from "@/lib/desktop";
+import { listen } from "@tauri-apps/api/event";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 export const Route = createFileRoute("/_app")({
   ssr: false,
@@ -84,6 +93,21 @@ function AppLayout() {
     // No desktop as configurações vêm do SQLite local.
     if (user) { fetchTicketSettings().catch(() => {}); }
   }, [user, desktopMode]);
+
+  /*
+   * Fechar o programa com turno aberto: o Rust segura a janela e avisa aqui.
+   * Ontem alguém desligou e foi embora; no dia seguinte o turno dele ainda
+   * estava aberto e o colega teve que fechar. Agora o aviso aparece antes.
+   */
+  const [turnoAbertoAoFechar, setTurnoAbertoAoFechar] = useState(false);
+  useEffect(() => {
+    if (!desktopMode) return;
+    let cancelar: (() => void) | undefined;
+    listen("turno-aberto-ao-fechar", () => setTurnoAbertoAoFechar(true))
+      .then((f) => { cancelar = f; })
+      .catch(() => {});
+    return () => { cancelar?.(); };
+  }, [desktopMode]);
 
   if (loading) return <div className="flex min-h-screen items-center justify-center">…</div>;
   if (!user) return <Navigate to="/auth" />;
@@ -297,7 +321,10 @@ function AppLayout() {
               "h-11 w-full rounded-sm px-2 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground",
               recolhida ? "justify-center" : "justify-center lg:justify-start",
             )}
-            onClick={async () => { await signOut(); navigate({ to: "/auth" }); }}
+            onClick={async () => {
+              await signOut();
+              navigate({ to: "/auth", replace: true });
+            }}
           >
             <LogOut className={cn("h-4 w-4", !recolhida && "lg:mr-2")} aria-hidden />
             <span className={cn(recolhida ? "hidden" : "hidden lg:inline")}>Sair</span>
@@ -307,6 +334,37 @@ function AppLayout() {
 
       <main className="min-w-0 flex-1 overflow-hidden">
         <Outlet />
+        <Dialog open={turnoAbertoAoFechar} onOpenChange={setTurnoAbertoAoFechar}>
+          <DialogContent className="max-w-md rounded-sm">
+            <DialogHeader>
+              <DialogTitle className="text-2xl">Feche o turno antes de sair</DialogTitle>
+              <DialogDescription>
+                Há um turno de caixa aberto. Confira a gaveta e feche o turno; só então o
+                programa pode ser encerrado. Assim o próximo turno não herda o caixa de ontem.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                className="h-11 rounded-sm px-5"
+                onClick={() => setTurnoAbertoAoFechar(false)}
+              >
+                Continuar trabalhando
+              </Button>
+              <Button
+                variant="ghost"
+                className="acao-receber h-11 rounded-sm px-6 font-bold uppercase"
+                style={{ fontFamily: "var(--font-display)" }}
+                onClick={() => {
+                  setTurnoAbertoAoFechar(false);
+                  navigate({ to: "/caixa" });
+                }}
+              >
+                Ir para o turno
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </main>
       <ExpiryAlert />
     </div>

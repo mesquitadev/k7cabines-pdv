@@ -25,7 +25,7 @@ mod template;
 mod users;
 
 use state::AppState;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -44,6 +44,11 @@ pub fn run() {
                 eprintln!("backup automático não executado: {error}");
             }
 
+            // Sessão não sobrevive ao fechamento do aplicativo: quem fechou sem
+            // sair volta pedindo senha. Pedido da loja — o computador é
+            // compartilhado entre turnos.
+            let _ = database.execute("DELETE FROM sessions", []);
+
             app.manage(AppState::new(database, app_data, db_path));
 
             // No macOS o binário de desenvolvimento roda fora de um .app; sem política
@@ -53,6 +58,23 @@ pub fn run() {
             app.set_activation_policy(tauri::ActivationPolicy::Regular);
 
             Ok(())
+        })
+        // Fechar a janela com turno aberto é proibido: a janela fica e o front
+        // mostra o aviso que leva para a tela do turno.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let state = window.state::<AppState>();
+                let turno_aberto = state
+                    .database
+                    .lock()
+                    .ok()
+                    .and_then(|db| cash::sessao_aberta(&db).ok().flatten())
+                    .is_some();
+                if turno_aberto {
+                    api.prevent_close();
+                    let _ = window.emit("turno-aberto-ao-fechar", ());
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
@@ -78,6 +100,7 @@ pub fn run() {
             commands::report_items,
             commands::report_movements,
             commands::report_deleted_sales,
+            commands::report_returns,
             commands::delete_sale,
             commands::list_users,
             commands::create_user,
@@ -110,6 +133,7 @@ pub fn run() {
             commands::cash_session_sales,
             commands::list_credit_vouchers,
             commands::withdraw_credit,
+            commands::settle_pending,
             commands::print_credit_voucher,
             commands::reprint_credit_voucher,
             commands::export_template_selection,

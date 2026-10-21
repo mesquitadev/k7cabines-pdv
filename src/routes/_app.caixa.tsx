@@ -68,6 +68,9 @@ function CaixaPage() {
   const [motivoMov, setMotivoMov] = useState("");
   const [fecharAberto, setFecharAberto] = useState(false);
   const [contado, setContado] = useState(0);
+  /* Relatório da maquininha, digitado: o que a máquina diz que passou. */
+  const [maquininha, setMaquininha] = useState(0);
+  const [maquininhaTocada, setMaquininhaTocada] = useState(false);
   const [notas, setNotas] = useState("");
 
   const carregar = useCallback(async () => {
@@ -143,12 +146,14 @@ function CaixaPage() {
   const fechar = async () => {
     if (!token) return;
     const ok = await executar(
-      () => desktop.cashClose(token, contado, notas || null),
+      () => desktop.cashClose(token, contado, maquininha, notas || null),
       "Turno fechado",
     );
     if (ok) {
       setFecharAberto(false);
       setContado(0);
+      setMaquininha(0);
+      setMaquininhaTocada(false);
       setNotas("");
     }
   };
@@ -172,6 +177,14 @@ function CaixaPage() {
   };
 
   const diferencaPrevia = resumo ? contado - resumo.esperado_cents : 0;
+  const esperadoMaquininha = resumo?.esperado_maquininha_cents ?? 0;
+  const diferencaMaquininha = maquininha - esperadoMaquininha;
+  /*
+   * A maquininha é obrigatória: zero só vale se o turno não teve cartão. Com
+   * cartão vendido, o operador precisa digitar o que a máquina mostra, mesmo
+   * que seja para confirmar que bate.
+   */
+  const maquininhaPronta = esperadoMaquininha === 0 ? true : maquininhaTocada;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -307,7 +320,7 @@ function CaixaPage() {
             {/* Recebimentos por forma: não entram na gaveta, mas fecham o turno. */}
             <div className="mb-4 grid gap-3 sm:grid-cols-3">
               <Cartao rotulo="Dinheiro" valor={resumo?.cash_cents ?? 0} icone={<Banknote className="h-4 w-4" />} />
-              <Cartao rotulo="Maquininha" valor={resumo?.card_cents ?? 0} icone={<CreditCard className="h-4 w-4" />} />
+              <Cartao rotulo="Maquininha" valor={resumo?.esperado_maquininha_cents ?? resumo?.card_cents ?? 0} icone={<CreditCard className="h-4 w-4" />} />
               {/* Só em turno que tenha venda antiga com PIX. */}
               {(resumo?.pix_cents ?? 0) > 0 && (
                 <Cartao rotulo="PIX" valor={resumo?.pix_cents ?? 0} icone={<QrCode className="h-4 w-4" />} />
@@ -562,42 +575,50 @@ function CaixaPage() {
               />
             </div>
 
-            {contado > 0 && (
-              <div
-                className="flex items-center justify-between border p-4"
-                style={{
-                  borderColor:
-                    diferencaPrevia === 0
-                      ? "var(--success)"
-                      : diferencaPrevia < 0
-                        ? "var(--destructive)"
-                        : "var(--warning)",
-                  background:
-                    diferencaPrevia === 0
-                      ? "color-mix(in oklab, var(--success) 14%, transparent)"
-                      : diferencaPrevia < 0
-                        ? "color-mix(in oklab, var(--destructive) 14%, transparent)"
-                        : "color-mix(in oklab, var(--warning) 14%, transparent)",
+            {contado > 0 && <Conferencia diferenca={diferencaPrevia} />}
+
+            {/* Maquininha: o relatório da máquina contra o que as vendas dizem.
+                Pedido do cliente — venda lançada como cartão e não passada na
+                máquina não aparece na gaveta, só aqui. */}
+            <div className="flex items-end justify-between border-b border-t border-border py-3">
+              <Rotulo className="flex items-center gap-1.5">
+                Esperado na maquininha
+                <Ajuda>
+                  Soma das vendas em cartão do turno, menos estornos na máquina. Compare com o
+                  relatório (fechamento) impresso pela própria maquininha.
+                </Ajuda>
+              </Rotulo>
+              <span className="num text-3xl font-bold">
+                {dinheiro(esperadoMaquininha / 100)}
+              </span>
+            </div>
+
+            <div className="space-y-1.5">
+              <CampoMoeda
+                id="maquininha"
+                rotulo="Relatório da maquininha"
+                grande
+                centavos={maquininha}
+                onChange={(c) => {
+                  setMaquininha(c);
+                  setMaquininhaTocada(true);
                 }}
-              >
-                <Rotulo
-                  className="text-[13px]"
-                  style={{
-                    color:
-                      diferencaPrevia === 0
-                        ? "var(--success)"
-                        : diferencaPrevia < 0
-                          ? "var(--destructive)"
-                          : "var(--warning)",
-                  }}
-                >
-                  {diferencaPrevia === 0 ? "Confere" : diferencaPrevia < 0 ? "Falta" : "Sobra"}
-                </Rotulo>
-                <Numeros
-                  valor={dinheiro(Math.abs(diferencaPrevia) / 100)}
-                  className="text-3xl font-bold leading-none"
-                />
-              </div>
+              />
+              {!maquininhaPronta && (
+                <p className="text-xs text-muted-foreground">
+                  Puxe o fechamento na maquininha e digite o total. Obrigatório quando houve
+                  venda em cartão.
+                </p>
+              )}
+            </div>
+
+            {maquininhaTocada && (
+              <Conferencia
+                diferenca={diferencaMaquininha}
+                rotuloOk="Maquininha confere"
+                rotuloFalta="Falta na maquininha"
+                rotuloSobra="Sobra na maquininha"
+              />
             )}
 
             <div className="space-y-1.5">
@@ -618,7 +639,7 @@ function CaixaPage() {
             <Button
               variant="ghost"
               className="acao-destrutiva h-12 flex-1 rounded-sm font-bold uppercase"
-              disabled={busy || contado <= 0}
+              disabled={busy || contado <= 0 || !maquininhaPronta}
               onClick={fechar}
               style={{ fontFamily: "var(--font-display)" }}
             >
@@ -657,6 +678,33 @@ function Cartao({ rotulo, valor, icone }: { rotulo: string; valor: number; icone
         {rotulo}
       </Rotulo>
       <span className="num text-xl font-bold">{dinheiro(valor / 100)}</span>
+    </div>
+  );
+}
+
+/** Bloco de diferença: confere, falta ou sobra, com a cor da gravidade. */
+function Conferencia({
+  diferenca,
+  rotuloOk = "Confere",
+  rotuloFalta = "Falta",
+  rotuloSobra = "Sobra",
+}: {
+  diferenca: number;
+  rotuloOk?: string;
+  rotuloFalta?: string;
+  rotuloSobra?: string;
+}) {
+  const cor =
+    diferenca === 0 ? "var(--success)" : diferenca < 0 ? "var(--destructive)" : "var(--warning)";
+  return (
+    <div
+      className="flex items-center justify-between border p-4"
+      style={{ borderColor: cor, background: `color-mix(in oklab, ${cor} 14%, transparent)` }}
+    >
+      <Rotulo className="text-[13px]" style={{ color: cor }}>
+        {diferenca === 0 ? rotuloOk : diferenca < 0 ? rotuloFalta : rotuloSobra}
+      </Rotulo>
+      <Numeros valor={dinheiro(Math.abs(diferenca) / 100)} className="text-3xl font-bold leading-none" />
     </div>
   );
 }

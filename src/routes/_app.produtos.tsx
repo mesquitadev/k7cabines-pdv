@@ -53,6 +53,8 @@ interface Product {
   lastPurchaseCents?: number | null;
   highlight?: boolean;
   highlightEffective?: boolean;
+  /** Exige lote com validade. Pulseiras nunca; nos demais, decisão do cadastro. */
+  tracksExpiry?: boolean;
 }
 interface Batch { id: string; product_id: string; expiry_date: string; quantity: number; }
 
@@ -89,9 +91,12 @@ function Indicador({
 const normalize = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 const isEroticCategory = (cat: string) => {
   const n = normalize(cat);
-  // Todas as categorias exigem controle de validade por lote, exceto Pulseira
+  // Pulseiras nunca controlam validade; nas demais, quem decide é o produto.
   return !n.includes("pulseira");
 };
+/** Controle de validade efetivo: categoria permite E o cadastro pede. */
+const controlaValidade = (cat: string, flag: boolean | undefined) =>
+  isEroticCategory(cat) && (flag ?? true);
 
 // --- Validação de categorias duplicadas / muito parecidas ---
 const catKey = (s: string) =>
@@ -169,7 +174,7 @@ export default function Produtos() {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
-  const [form, setForm] = useState({ code: "", name: "", category: "Geral", subcategory: "", priceCents: 0, costCents: 0, barcode: "", minStock: "", stock: "", expiry: "", categoryId: "", parentId: "", variantName: "", unit: "UN", supplierId: "", highlight: false });
+  const [form, setForm] = useState({ code: "", name: "", category: "Geral", subcategory: "", priceCents: 0, costCents: 0, barcode: "", minStock: "", stock: "", expiry: "", categoryId: "", parentId: "", variantName: "", unit: "UN", supplierId: "", highlight: false, tracksExpiry: true });
   const [isNewCategory, setIsNewCategory] = useState(false);
   const [isNewSubcategory, setIsNewSubcategory] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -223,6 +228,7 @@ export default function Produtos() {
         lastPurchaseCents: p.last_purchase_cents,
         highlight: p.highlight,
         highlightEffective: p.highlight_effective,
+        tracksExpiry: p.tracks_expiry,
       })));
       setBatches(bats);
       return;
@@ -366,7 +372,7 @@ export default function Produtos() {
   const openNew = () => {
     setEditing(null);
     const defaultCat = categoryOptions[0] ?? "Geral";
-    setForm({ code: "", name: "", category: defaultCat, subcategory: "", priceCents: 0, costCents: 0, barcode: "", minStock: "", stock: "", expiry: "", categoryId: "", parentId: "", variantName: "", unit: "UN", supplierId: "", highlight: false });
+    setForm({ code: "", name: "", category: defaultCat, subcategory: "", priceCents: 0, costCents: 0, barcode: "", minStock: "", stock: "", expiry: "", categoryId: "", parentId: "", variantName: "", unit: "UN", supplierId: "", highlight: false, tracksExpiry: true });
     setIsNewCategory(false);
     setIsNewSubcategory(false);
     setOpen(true);
@@ -380,13 +386,14 @@ export default function Produtos() {
       minStock: p.minStock ? String(p.minStock) : "", stock: String(p.stock), expiry: "",
       categoryId: p.categoryId ?? "", parentId: p.parentId ?? "", variantName: p.variantName ?? "",
       highlight: p.highlight ?? false,
+      tracksExpiry: p.tracksExpiry ?? true,
     });
     setIsNewCategory(!exists);
     setIsNewSubcategory(false);
     setOpen(true);
   };
 
-  const formIsErotic = isEroticCategory(form.category);
+  const formIsErotic = controlaValidade(form.category, form.tracksExpiry);
   /** Produto que agrupa variações não tem preço nem estoque próprios. */
   const agrupaVariacoes = (editing?.variantCount ?? 0) > 0;
 
@@ -451,7 +458,7 @@ export default function Produtos() {
     if (!localToken) return toast.error("Sessão local expirada. Entre novamente.");
     const stockQty = parseInt(form.stock, 10) || 0;
     {
-      const precisaValidade = isEroticCategory(basePayload.category);
+      const precisaValidade = controlaValidade(basePayload.category, form.tracksExpiry);
       try {
         if (editing) {
           await desktop.updateProduct(localToken, {
@@ -467,6 +474,7 @@ export default function Produtos() {
             parent_id: form.parentId || null,
             variant_name: form.variantName.trim(),
             highlight: form.highlight,
+            tracks_expiry: form.tracksExpiry,
           });
           toast.success("Produto atualizado");
         } else {
@@ -486,6 +494,7 @@ export default function Produtos() {
             parent_id: form.parentId || null,
             variant_name: form.variantName.trim(),
             highlight: form.highlight,
+            tracks_expiry: form.tracksExpiry,
           });
           if (stockQty > 0) {
             await desktop.addStock(localToken, {
@@ -684,6 +693,24 @@ export default function Produtos() {
                       </span>
                     </span>
                   </label>
+                  {/* Validade por produto: nem todo produto erótico tem data. */}
+                  {isEroticCategory(form.category) && (
+                    <label className="mt-3 flex cursor-pointer items-start gap-2.5 border border-border p-2.5">
+                      <input
+                        type="checkbox"
+                        className="marcador mt-0.5 shrink-0"
+                        checked={form.tracksExpiry}
+                        onChange={(e) => setForm({ ...form, tracksExpiry: e.target.checked })}
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-sm">Controla validade (exige lote com data)</span>
+                        <span className="block text-xs text-muted-foreground">
+                          Desmarque para produtos sem data de validade. A entrada de estoque deixa de
+                          pedir a data e o alerta de vencimento ignora este item.
+                        </span>
+                      </span>
+                    </label>
+                  )}
                 </SecaoForm>
 
                 <SecaoForm titulo="Classificação">
@@ -1212,7 +1239,7 @@ export default function Produtos() {
       <DialogoMovimento
         alvo={movAlvo}
         lotes={movAlvo ? (batchesByProduct.get(movAlvo.id) ?? []) : []}
-        exigeValidade={movAlvo ? isEroticCategory(movAlvo.category) : false}
+        exigeValidade={movAlvo ? controlaValidade(movAlvo.category, movAlvo.tracksExpiry) : false}
         pode={pode}
         fornecedores={fornecedores}
         fornecedorPadrao={movAlvo?.supplierId ?? ""}

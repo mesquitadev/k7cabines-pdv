@@ -6,6 +6,7 @@ use crate::{
     error::{AppError, AppResult},
     models::{
         DeleteSaleInput, Dre, DreCategoria, DreDia, LocalUser, ReportDeletedSale, ReportItem,
+        ReportReturn,
         ReportMovement, ReportRange, ReportSale,
     },
 };
@@ -115,8 +116,8 @@ pub fn dre(connection: &Connection, actor: &LocalUser, range: ReportRange) -> Ap
     // CMV e unidades pelo custo congelado no item.
     let (cmv, unidades, itens_total, itens_sem_custo): (i64, i64, i64, i64) = connection
         .query_row(
-            "SELECT COALESCE(SUM(i.quantity * COALESCE(i.unit_cost_cents, 0)), 0),
-                    COALESCE(SUM(i.quantity), 0),
+            "SELECT COALESCE(SUM((i.quantity - i.returned_quantity) * COALESCE(i.unit_cost_cents, 0)), 0),
+                    COALESCE(SUM(i.quantity - i.returned_quantity), 0),
                     COUNT(*),
                     COALESCE(SUM(CASE WHEN i.unit_cost_cents IS NULL THEN 1 ELSE 0 END), 0)
              FROM sale_items i
@@ -126,7 +127,9 @@ pub fn dre(connection: &Connection, actor: &LocalUser, range: ReportRange) -> Ap
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
 
-    // Devoluções pela data do estorno, não da venda: é quando o dinheiro sai.
+    // Alterações (devoluções) pela data em que foram feitas. Só informação: a
+    // venda alterada já teve total e meio de pagamento reduzidos, então os
+    // somatórios acima já estão líquidos e nada é descontado de novo aqui.
     let devolucoes: i64 = connection.query_row(
         "SELECT COALESCE(SUM(r.amount_cents), 0)
          FROM sale_returns r JOIN sales s ON s.id = r.sale_id
@@ -136,14 +139,14 @@ pub fn dre(connection: &Connection, actor: &LocalUser, range: ReportRange) -> Ap
         |row| row.get(0),
     )?;
 
-    let receita_liquida = receita_bruta - descontos - devolucoes;
+    let receita_liquida = receita_bruta - descontos;
     let lucro_bruto = receita_liquida - cmv;
 
     let mut st = connection.prepare(
         "SELECT i.category,
                 COALESCE(SUM(i.subtotal_cents), 0),
-                COALESCE(SUM(i.quantity * COALESCE(i.unit_cost_cents, 0)), 0),
-                COALESCE(SUM(i.quantity), 0),
+                COALESCE(SUM((i.quantity - i.returned_quantity) * COALESCE(i.unit_cost_cents, 0)), 0),
+                COALESCE(SUM(i.quantity - i.returned_quantity), 0),
                 COALESCE(SUM(CASE WHEN i.unit_cost_cents IS NULL THEN 1 ELSE 0 END), 0)
          FROM sale_items i
          JOIN sales s ON s.id = i.sale_id
@@ -171,7 +174,7 @@ pub fn dre(connection: &Connection, actor: &LocalUser, range: ReportRange) -> Ap
     let mut st = connection.prepare(
         "SELECT s.business_date,
                 COALESCE(SUM(i.subtotal_cents), 0),
-                COALESCE(SUM(i.quantity * COALESCE(i.unit_cost_cents, 0)), 0),
+                COALESCE(SUM((i.quantity - i.returned_quantity) * COALESCE(i.unit_cost_cents, 0)), 0),
                 COUNT(DISTINCT s.id)
          FROM sales s
          LEFT JOIN sale_items i ON i.sale_id = s.id
@@ -224,7 +227,7 @@ pub fn sales(
     let (from, to) = validate_range(connection, actor, &range)?;
     let mut statement = connection.prepare(
         "SELECT s.id, s.sale_number, s.created_at, s.operator_name,
-                COALESCE((SELECT SUM(i.quantity) FROM sale_items i WHERE i.sale_id = s.id), 0),
+                COALESCE((SELECT SUM(i.quantity - i.returned_quantity) FROM sale_items i WHERE i.sale_id = s.id), 0),
                 s.total_cents, s.cash_tendered_cents, s.card_cents,
                 s.discount_cents, COALESCE(s.discount_reason, ''), COALESCE(s.customer_name, '')
          FROM sales s
@@ -260,12 +263,13 @@ pub fn items(
     }
     let (from, to) = validate_range(connection, actor, &range)?;
     let mut statement = connection.prepare(
-        "SELECT i.sale_id, i.category, i.product_name, i.quantity, i.subtotal_cents, s.created_at,
-                COALESCE(p.subcategory, '')
+        "SELECT i.sale_id, i.category, i.product_name, i.quantity - i.returned_quantity,
+                i.subtotal_cents, s.created_at, COALESCE(p.subcategory, '')
          FROM sale_items i
          JOIN sales s ON s.id = i.sale_id
          LEFT JOIN products p ON p.code = i.product_code
          WHERE s.status = 'completed' AND s.business_date BETWEEN ?1 AND ?2
+           AND i.quantity > i.returned_quantity
          ORDER BY s.created_at DESC",
     )?;
     let rows = statement.query_map(params![from, to], |row| {
@@ -304,6 +308,39 @@ pub fn movements(
             reason: row.get(3)?,
             actor_name: row.get(4)?,
             occurred_at: row.get(5)?,
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+/// Itens alterados (devolvidos) no período, pela data da alteração. É o que o
+/// fechamento lista no lugar das "vendas excluídas": o pedido não some, muda.
+pub fn returns(
+    connection: &Connection,
+    actor: &LocalUser,
+    range: ReportRange,
+) -> AppResult<Vec<ReportReturn>> {
+    require(actor, "reports.closing")?;
+    let (from, to) = validate_range(connection, actor, &range)?;
+    let mut statement = connection.prepare(
+        "SELECT s.sale_number, i.product_name, r.quantity, r.amount_cents, r.refund_kind,
+                r.actor_name, r.reason, r.occurred_at
+         FROM sale_returns r
+         JOIN sales s ON s.id = r.sale_id
+         JOIN sale_items i ON i.id = r.sale_item_id
+         WHERE date(r.occurred_at, 'localtime') BETWEEN ?1 AND ?2
+         ORDER BY r.occurred_at DESC",
+    )?;
+    let rows = statement.query_map(params![from, to], |row| {
+        Ok(ReportReturn {
+            sale_number: row.get(0)?,
+            product_name: row.get(1)?,
+            quantity: row.get(2)?,
+            amount_cents: row.get(3)?,
+            refund_kind: row.get(4)?,
+            actor_name: row.get(5)?,
+            reason: row.get(6)?,
+            occurred_at: row.get(7)?,
         })
     })?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -527,7 +564,7 @@ mod tests_cancelamento {
         let venda = sales::finalize(&mut c, &gerente(), FinalizeSaleInput {
             client_sale_id: "v1".into(),
             items: vec![SaleItemInput { product_id: "p1".into(), quantity: 3, credit: false }],
-            cash_tendered_cents: 2100, card_cents: 0, pix_cents: 0, discount_cents: 0, discount_reason: String::new(), customer_name: String::new(), credit_customer: None,
+            cash_tendered_cents: 2100, card_cents: 0, pix_cents: 0, discount_cents: 0, discount_reason: String::new(), customer_name: String::new(), credit_customer: None, pending: false,
         }).unwrap();
 
         let lote_apos_venda: i64 = c.query_row(
@@ -565,7 +602,7 @@ mod tests_cancelamento {
         let venda = sales::finalize(&mut c, &gerente(), FinalizeSaleInput {
             client_sale_id: "v1".into(),
             items: vec![SaleItemInput { product_id: "p1".into(), quantity: 2, credit: false }],
-            cash_tendered_cents: 1400, card_cents: 0, pix_cents: 0, discount_cents: 0, discount_reason: String::new(), customer_name: String::new(), credit_customer: None,
+            cash_tendered_cents: 1400, card_cents: 0, pix_cents: 0, discount_cents: 0, discount_reason: String::new(), customer_name: String::new(), credit_customer: None, pending: false,
         }).unwrap();
 
         let hoje = chrono::Local::now().date_naive().to_string();
@@ -658,9 +695,11 @@ mod tests_dre {
         )
         .unwrap();
         let r = dre(&c, &ator(), periodo()).unwrap();
-        assert_eq!(r.devolucoes_cents, 5000);
-        assert_eq!(r.receita_liquida_cents, 4000, "bruta 100 - desconto 10 - devolução 50");
-        assert_eq!(r.lucro_bruto_cents, 0);
+        assert_eq!(r.devolucoes_cents, 5000, "a alteração aparece como informação do período");
+        // A venda alterada já carrega o total reduzido; aqui a linha foi
+        // inserida à mão sem mexer na venda, então a líquida não desconta de novo.
+        assert_eq!(r.receita_liquida_cents, 9000, "bruta 100 - desconto 10");
+        assert_eq!(r.lucro_bruto_cents, 5000);
     }
 
     #[test]
@@ -767,7 +806,7 @@ mod tests {
             cash_tendered_cents: 1400,
             card_cents: 0,
             pix_cents: 0,
-            discount_cents: 0, discount_reason: String::new(), customer_name: String::new(), credit_customer: None,
+            discount_cents: 0, discount_reason: String::new(), customer_name: String::new(), credit_customer: None, pending: false,
         }).unwrap();
         c
     }

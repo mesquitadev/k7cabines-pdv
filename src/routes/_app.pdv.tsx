@@ -104,6 +104,14 @@ export default function PDV() {
   // digita (800 é oito reais). Float no meio do caminho só cria arredondamento.
   const [cash, setCash] = useState(0);
   const [card, setCard] = useState(0);
+  /*
+   * Receber e imprimir são decisões separadas: nem todo cliente quer papel.
+   * O parâmetro de impressão automática só escolhe qual botão fica em
+   * destaque; os dois existem sempre.
+   */
+  const [imprimeAuto, setImprimeAuto] = useState(true);
+  /** Atalho de forma de pagamento escolhido, para colorir o botão ativo. */
+  const [formaPagamento, setFormaPagamento] = useState<"dinheiro" | "maquininha" | "misto" | null>(null);
   const [desconto, setDesconto] = useState(0);
   /* Pedido do cliente: desconto não pede senha, pede motivo — e o motivo sai no relatório. */
   const [motivoDesconto, setMotivoDesconto] = useState("");
@@ -111,6 +119,13 @@ export default function PDV() {
   /* Nome pelo qual a ficha é encontrada depois. Sem cadastro: apelido de fila. */
   const [nomeFicha, setNomeFicha] = useState("");
   const [fichasAberto, setFichasAberto] = useState(false);
+  /*
+   * Pendência: a ficha ao contrário. O cliente leva agora (a bolsa fica no
+   * guarda-volume) e paga na retirada. O papel vai grampeado na bolsa.
+   */
+  const [pendencia, setPendencia] = useState(false);
+  const [pendenciaAberta, setPendenciaAberta] = useState(false);
+  const [nomePendencia, setNomePendencia] = useState("");
   const [fichasAbertas, setFichasAbertas] = useState(0);
   const [busy, setBusy] = useState(false);
   const [lastSale, setLastSale] = useState<CompletedSale | null>(null);
@@ -329,6 +344,10 @@ export default function PDV() {
           toast.error("Ficha é um item só: um produto, uma unidade por venda");
           return c;
         }
+        if (pendencia && c.length > 0) {
+          toast.error("Pendência é um item só: um produto, uma unidade por venda");
+          return c;
+        }
         const i = c.findIndex((x) => x.product_id === p.id);
         if (i >= 0) {
           if (k7) {
@@ -405,6 +424,10 @@ export default function PDV() {
           toast.error("Ficha é um item só: um produto, uma unidade por venda");
           return [i];
         }
+        if (delta > 0 && pendencia) {
+          toast.error("Pendência é um item só: um produto, uma unidade por venda");
+          return [i];
+        }
         const q = i.quantity + delta;
         if (q <= 0) return [];
         if (delta > 0) {
@@ -443,6 +466,10 @@ export default function PDV() {
     }
     if (item.credito && desejada > 1) {
       toast.error("Ficha é um item só: um produto, uma unidade por venda");
+      return;
+    }
+    if (pendencia && desejada > 1) {
+      toast.error("Pendência é um item só: um produto, uma unidade por venda");
       return;
     }
     let quantidade = desejada;
@@ -516,6 +543,16 @@ export default function PDV() {
     setCart((c) => c.map((i) => ({ ...i, credito: ligar })));
   };
 
+  /** Liga a pendência: um produto, uma unidade, e nenhum item em ficha. */
+  const alternarPendencia = (ligar: boolean) => {
+    if (ligar && (cart.length > 1 || cart.some((i) => i.quantity > 1))) {
+      toast.error("Pendência é um item só: um produto, uma unidade por venda");
+      return;
+    }
+    if (ligar) setCart((c) => c.map((i) => ({ ...i, credito: false })));
+    setPendencia(ligar);
+  };
+
   /** Ficha marcada: o pedido tem que ser exatamente um produto, uma unidade. */
   const fichaInvalida = (c: CartItem[]) =>
     c.some((i) => i.credito) && (c.length > 1 || c.some((i) => i.quantity > 1));
@@ -527,6 +564,15 @@ export default function PDV() {
 
   const openPay = useCallback(() => {
     if (!cart.length) return toast.error("Nenhum item no pedido");
+    // Pendência não passa pelo pagamento: o dinheiro entra na retirada.
+    if (pendencia) {
+      if (cart.length > 1 || cart.some((i) => i.quantity > 1)) {
+        return toast.error("Pendência é um item só: um produto, uma unidade por venda");
+      }
+      setNomePendencia("");
+      setPendenciaAberta(true);
+      return;
+    }
     if (fichaInvalida(cart)) {
       return toast.error("Ficha é um item só: um produto, uma unidade por venda");
     }
@@ -536,8 +582,10 @@ export default function PDV() {
     setMotivoDesconto("");
     setClienteDesconto("");
     setNomeFicha("");
+    setFormaPagamento(null);
+    void imprimeCupomSozinho().then(setImprimeAuto);
     setPayOpen(true);
-  }, [cart.length, total]);
+  }, [cart.length, total, pendencia]);
 
   /** Leitor de código de barras: digita e dá Enter. Resultado único entra direto. */
   const onBuscaKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -580,7 +628,41 @@ export default function PDV() {
     return () => window.removeEventListener("keydown", onKey);
   }, [openPay, payOpen]);
 
-  const finalize = async () => {
+  /** Grava a venda em pendência e imprime o papel que vai na bolsa. */
+  const registrarPendencia = async () => {
+    if (!localToken) return toast.error("Sessão local expirada. Entre novamente.");
+    if (!cart.length) return;
+    setBusy(true);
+    try {
+      const sale = await desktop.finalizeSale(localToken, {
+        client_sale_id: idDaVenda.current,
+        items: cart.map((i) => ({ product_id: i.product_id, quantity: i.quantity, credit: false })),
+        credit_customer: nomePendencia.trim() || null,
+        cash_tendered_cents: 0,
+        card_cents: 0,
+        discount_cents: 0,
+        discount_reason: "",
+        customer_name: nomePendencia.trim(),
+        pending: true,
+      });
+      idDaVenda.current = crypto.randomUUID();
+      setPendenciaAberta(false);
+      setPendencia(false);
+      setCart([]);
+      await loadProducts();
+      toast.success(`Pendência ${String(sale.sale_number).padStart(5, "0")} registrada`);
+      // O papel da pendência é o que vai grampeado na bolsa.
+      await imprimirFicha(sale.id);
+      await contarFichas();
+      buscaRef.current?.focus();
+    } catch (error) {
+      toast.error(typeof error === "string" ? error : "Não foi possível registrar a pendência");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const finalize = async (imprimir: boolean) => {
     const c = cash / 100;
     const k = card / 100;
     const paid = c + k;
@@ -640,11 +722,11 @@ export default function PDV() {
         await loadProducts();
         await carregarTurno();
         toast.success(`Pedido ${String(sale.sale_number).padStart(5, "0")} emitido`);
-        if (await imprimeCupomSozinho()) {
+        if (imprimir) {
           await imprimirCupom(sale.id);
         }
         // A ficha é outro papel: prova o que falta retirar, e é ela que o
-        // cliente leva no bolso.
+        // cliente leva no bolso. Sai sempre, mesmo sem cupom.
         await imprimirFicha(sale.id);
         await contarFichas();
         buscaRef.current?.focus();
@@ -823,6 +905,29 @@ export default function PDV() {
             Ficha
           </span>
           <span className="text-xs text-muted-foreground">retira depois · 1 item por ficha</span>
+        </label>
+        {/* PENDÊNCIA: leva agora, paga ao retirar a bolsa. O papel vai grampeado nela. */}
+        <label
+          className={cn(
+            "mb-3 flex cursor-pointer items-center gap-3 rounded-sm border px-3 py-2 select-none",
+            pendencia ? "border-warning bg-warning/15" : "border-border",
+            (!cart.length || fichaMarcada) && "cursor-not-allowed opacity-40",
+          )}
+        >
+          <input
+            type="checkbox"
+            className="h-6 w-6 accent-[var(--warning)]"
+            checked={pendencia}
+            disabled={!cart.length || fichaMarcada}
+            onChange={(e) => alternarPendencia(e.target.checked)}
+          />
+          <span
+            className="text-xl font-bold uppercase tracking-wide"
+            style={{ fontFamily: "var(--font-display)" }}
+          >
+            Pendência
+          </span>
+          <span className="text-xs text-muted-foreground">paga na retirada · 1 item</span>
         </label>
         <div className="mb-3 flex items-end justify-between gap-3">
           <Rotulo className="pb-2">Total</Rotulo>
@@ -1234,6 +1339,54 @@ export default function PDV() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={pendenciaAberta} onOpenChange={(o) => !o && setPendenciaAberta(false)}>
+        <DialogContent className="max-w-md rounded-sm">
+          <DialogHeader>
+            <DialogTitle className="text-2xl">Registrar pendência</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <p>
+              {cart.map((i) => `${i.quantity}× ${i.product_name}`).join(", ")} ·{" "}
+              <strong className="num">{dinheiro(total)}</strong> a pagar na retirada da bolsa.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Nada entra no caixa agora. O papel sai com código grande para grampear na bolsa;
+              na retirada, use o botão de fichas para receber.
+            </p>
+            <div className="space-y-1.5">
+              <Label htmlFor="nomePendencia">Nome ou referência (opcional)</Label>
+              <Input
+                id="nomePendencia"
+                autoFocus
+                value={nomePendencia}
+                onChange={(e) => setNomePendencia(e.target.value)}
+                placeholder="Ex.: bolsa 12, João"
+                className="campo h-12 rounded-sm"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              className="h-11 rounded-sm px-5"
+              onClick={() => setPendenciaAberta(false)}
+              disabled={busy}
+            >
+              Cancelar
+            </Button>
+            <Button
+              variant="ghost"
+              className="acao-receber h-11 rounded-sm px-6 font-bold uppercase"
+              style={{ fontFamily: "var(--font-display)" }}
+              onClick={registrarPendencia}
+              disabled={busy}
+            >
+              {busy ? "Registrando…" : "Registrar pendência e imprimir"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <DrawerFichas
         aberto={fichasAberto}
         onFechar={() => setFichasAberto(false)}
@@ -1266,34 +1419,42 @@ export default function PDV() {
               </div>
             </div>
 
+            {/*
+              Forma de pagamento com cor, pedido do cliente: verde é só
+              dinheiro, amarelo é só maquininha, branco é os dois. A cor é o
+              que o operador vê de longe antes de ler o rótulo.
+            */}
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                aria-pressed={formaPagamento === "dinheiro"}
+                onClick={() => { setFormaPagamento("dinheiro"); setCash(totalCents); setCard(0); }}
+                className={cn("forma-pagamento forma-dinheiro", formaPagamento === "dinheiro" && "ativa")}
+              >
+                Só dinheiro
+              </button>
+              <button
+                type="button"
+                aria-pressed={formaPagamento === "maquininha"}
+                onClick={() => { setFormaPagamento("maquininha"); setCash(0); setCard(totalCents); }}
+                className={cn("forma-pagamento forma-maquininha", formaPagamento === "maquininha" && "ativa")}
+              >
+                Só maquininha
+              </button>
+              <button
+                type="button"
+                aria-pressed={formaPagamento === "misto"}
+                onClick={() => { setFormaPagamento("misto"); setCash(0); setCard(0); }}
+                className={cn("forma-pagamento forma-mista", formaPagamento === "misto" && "ativa")}
+              >
+                Dinheiro + maquininha
+              </button>
+            </div>
+
             {/* PIX é cobrado na maquininha, então entra como maquininha. */}
             <div className="grid grid-cols-2 gap-3">
               <CampoMoeda id="pagDinheiro" rotulo="Dinheiro" centavos={cash} onChange={onDinheiro} />
               <CampoMoeda id="pagCartao" rotulo="Maquininha" centavos={card} onChange={setCard} />
-            </div>
-
-            <div className="grid grid-cols-3 gap-2">
-              <Button
-                variant="outline"
-                className="h-12 rounded-sm"
-                onClick={() => { setCash(totalCents); setCard(0); }}
-              >
-                Só dinheiro
-              </Button>
-              <Button
-                variant="outline"
-                className="h-12 rounded-sm"
-                onClick={() => { setCash(0); setCard(totalCents); }}
-              >
-                Só maquininha
-              </Button>
-              <Button
-                variant="outline"
-                className="h-12 rounded-sm"
-                onClick={() => { const m = Math.round(totalCents / 2); setCash(m); setCard(totalCents - m); }}
-              >
-                Meio a meio
-              </Button>
             </div>
 
             {/*
@@ -1385,18 +1546,37 @@ export default function PDV() {
             </div>
           </div>
 
-          <DialogFooter className="gap-2">
+          <DialogFooter className="gap-2 sm:justify-stretch">
             <Button variant="outline" className="h-14 rounded-sm px-6" onClick={() => setPayOpen(false)}>
               Cancelar
             </Button>
+            {/*
+              Dois jeitos de fechar: com ou sem papel. O destacado segue o
+              parâmetro de impressão automática; o outro fica sempre à mão.
+            */}
             <Button
-              variant="ghost"
-              onClick={finalize}
+              variant={imprimeAuto ? "outline" : "ghost"}
+              onClick={() => void finalize(false)}
               disabled={busy || faltaDialogo > 0}
-              className="acao-receber h-14 flex-1 rounded-sm text-lg font-bold uppercase"
+              className={cn(
+                "h-14 flex-1 rounded-sm text-lg font-bold uppercase",
+                !imprimeAuto && "acao-receber",
+              )}
               style={{ fontFamily: "var(--font-display)" }}
             >
-              {busy ? "Emitindo…" : "Confirmar e imprimir"}
+              {busy ? "Emitindo…" : "Receber"}
+            </Button>
+            <Button
+              variant={imprimeAuto ? "ghost" : "outline"}
+              onClick={() => void finalize(true)}
+              disabled={busy || faltaDialogo > 0}
+              className={cn(
+                "h-14 flex-1 rounded-sm text-lg font-bold uppercase",
+                imprimeAuto && "acao-receber",
+              )}
+              style={{ fontFamily: "var(--font-display)" }}
+            >
+              {busy ? "Emitindo…" : "Receber e imprimir"}
             </Button>
           </DialogFooter>
         </DialogContent>

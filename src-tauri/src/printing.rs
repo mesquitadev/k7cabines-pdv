@@ -450,9 +450,17 @@ pub fn montar_ficha(
     if !ticket.store_name.trim().is_empty() {
         c.linha(&ticket.store_name);
     }
-    // Pedido do cliente: "FICHA" em letras grandes, para ninguem confundir com cupom.
-    c.tamanho(2).negrito(true).linha("FICHA").negrito(false).tamanho(0);
-    c.negrito(true).linha("RETIRAR DEPOIS").negrito(false);
+    // Pedido do cliente: "FICHA" (ou "PENDENCIA") em letras grandes, para
+    // ninguem confundir com cupom. A pendencia e o papel grampeado na bolsa:
+    // o cliente paga ao retirar.
+    let pendencia = ficha.kind == "pendencia";
+    if pendencia {
+        c.tamanho(2).negrito(true).linha("PENDENCIA").negrito(false).tamanho(0);
+        c.negrito(true).linha("PAGAR NA RETIRADA").negrito(false);
+    } else {
+        c.tamanho(2).negrito(true).linha("FICHA").negrito(false).tamanho(0);
+        c.negrito(true).linha("RETIRAR DEPOIS").negrito(false);
+    }
 
     // Ficha ao portador: o código é o que identifica o papel. Sai no maior corpo.
     if !ficha.code.is_empty() {
@@ -502,9 +510,22 @@ pub fn montar_ficha(
     }
     c.regua();
 
-    c.alinhar(Alinhamento::Centro).paragrafo(
-        "Ficha ao portador. Apresente no balcao para retirar, uma de cada vez.",
-    );
+    if pendencia {
+        let reais = |centavos: i64| -> String {
+            format!("R$ {},{:02}", centavos / 100, centavos % 100)
+        };
+        c.alinhar(Alinhamento::Centro)
+            .tamanho(2)
+            .negrito(true)
+            .linha(&format!("A PAGAR {}", reais(ficha.pending_cents)))
+            .negrito(false)
+            .tamanho(0);
+        c.paragrafo("Apresente no caixa ao retirar a bolsa.");
+    } else {
+        c.alinhar(Alinhamento::Centro).paragrafo(
+            "Ficha ao portador. Apresente no balcao para retirar, uma de cada vez.",
+        );
+    }
 
     c.avancar(config.feed_lines as u8);
     if config.cut_paper {
@@ -807,6 +828,8 @@ mod tests {
             ..Default::default()
         };
         let ficha = CreditVoucher {
+            kind: "ficha".into(),
+            pending_cents: 0,
             id: "f1".into(),
             sale_id: "s1".into(),
             sale_number: 42,

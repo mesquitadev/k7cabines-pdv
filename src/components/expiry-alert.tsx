@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Button } from "@/components/ui/button";
 import { AlertTriangle } from "lucide-react";
 
-interface Product { id: string; name: string; category: string; }
+interface Product { id: string; name: string; category: string; tracksExpiry: boolean; }
 interface Batch { product_id: string; expiry_date: string; quantity: number; }
 
 const normalize = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
@@ -40,7 +40,7 @@ export function ExpiryAlert() {
             desktop.listBatches(token),
           ]);
           if (cancelled) return;
-          products = prods.map((p) => ({ id: p.id, name: p.name, category: p.category }));
+          products = prods.map((p) => ({ id: p.id, name: p.name, category: p.category, tracksExpiry: p.tracks_expiry ?? true }));
           batches = bats.map((b) => ({
             product_id: b.product_id, expiry_date: b.expiry_date, quantity: b.quantity,
           }));
@@ -56,7 +56,7 @@ export function ExpiryAlert() {
       }
       const result: { name: string; days: number; date: string }[] = [];
       for (const p of products) {
-        if (!isEroticCategory(p.category)) continue;
+        if (!isEroticCategory(p.category) || !p.tracksExpiry) continue;
         const arr = grouped.get(p.id);
         if (!arr || !arr.length) continue;
         const future = arr.filter(b => b.expiry_date >= today).sort((a, b) => a.expiry_date.localeCompare(b.expiry_date));

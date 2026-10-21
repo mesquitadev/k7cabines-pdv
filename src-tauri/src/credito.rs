@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{AppError, AppResult},
-    models::{CreditVoucher, CreditVoucherItem, LocalUser, WithdrawCreditInput},
+    models::{CreditVoucher, CreditVoucherItem, LocalUser, SettlePendingInput, WithdrawCreditInput},
 };
 
 fn require(actor: &LocalUser, permission: &str) -> AppResult<()> {
@@ -65,24 +65,28 @@ pub fn gerar_codigo(connection: &Connection) -> AppResult<String> {
 
 pub fn por_id(connection: &Connection, actor: &LocalUser, id: &str) -> AppResult<CreditVoucher> {
     require(actor, "credit.withdraw")?;
-    let (sale_id, sale_number, customer_name, created_at, settled_at, code) = connection
-        .query_row(
-            "SELECT v.sale_id, s.sale_number, v.customer_name, v.created_at, v.settled_at, v.code
-             FROM credit_vouchers v JOIN sales s ON s.id = v.sale_id WHERE v.id = ?1",
-            params![id],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                ))
-            },
-        )
-        .optional()?
-        .ok_or(AppError::NotFound)?;
+    let (sale_id, sale_number, customer_name, created_at, settled_at, code, kind, pending_cents) =
+        connection
+            .query_row(
+                "SELECT v.sale_id, s.sale_number, v.customer_name, v.created_at, v.settled_at, v.code,
+                        v.kind, s.pending_cents
+                 FROM credit_vouchers v JOIN sales s ON s.id = v.sale_id WHERE v.id = ?1",
+                params![id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(AppError::NotFound)?;
     Ok(CreditVoucher {
         items: itens_da_ficha(connection, id)?,
         id: id.to_string(),
@@ -90,31 +94,42 @@ pub fn por_id(connection: &Connection, actor: &LocalUser, id: &str) -> AppResult
         sale_number,
         code,
         customer_name,
+        kind,
+        pending_cents,
         created_at,
         settled_at,
     })
 }
 
+/// Linha base de uma ficha, antes de carregar os itens.
+type FichaBase = (String, i64, String, String, Option<String>, String, String, i64);
+
 /// A ficha criada por uma venda, quando houve item em crédito.
 pub fn da_venda(connection: &Connection, sale_id: &str) -> AppResult<Option<CreditVoucher>> {
-    let base: Option<(String, i64, String, String, Option<String>, String)> = connection
-        .query_row(
-            "SELECT v.id, s.sale_number, v.customer_name, v.created_at, v.settled_at, v.code
-             FROM credit_vouchers v JOIN sales s ON s.id = v.sale_id WHERE v.sale_id = ?1",
-            params![sale_id],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                ))
-            },
-        )
-        .optional()?;
-    let Some((id, sale_number, customer_name, created_at, settled_at, code)) = base else {
+    let base: Option<FichaBase> =
+        connection
+            .query_row(
+                "SELECT v.id, s.sale_number, v.customer_name, v.created_at, v.settled_at, v.code,
+                        v.kind, s.pending_cents
+                 FROM credit_vouchers v JOIN sales s ON s.id = v.sale_id WHERE v.sale_id = ?1",
+                params![sale_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                    ))
+                },
+            )
+            .optional()?;
+    let Some((id, sale_number, customer_name, created_at, settled_at, code, kind, pending_cents)) =
+        base
+    else {
         return Ok(None);
     };
     Ok(Some(CreditVoucher {
@@ -124,6 +139,8 @@ pub fn da_venda(connection: &Connection, sale_id: &str) -> AppResult<Option<Cred
         sale_number,
         code,
         customer_name,
+        kind,
+        pending_cents,
         created_at,
         settled_at,
     }))
@@ -146,7 +163,8 @@ pub fn listar_abertas(
     let codigo = normalizar_codigo(termo);
 
     let mut st = connection.prepare(
-        "SELECT v.id, v.sale_id, s.sale_number, v.customer_name, v.created_at, v.settled_at, v.code
+        "SELECT v.id, v.sale_id, s.sale_number, v.customer_name, v.created_at, v.settled_at, v.code,
+                v.kind, s.pending_cents
          FROM credit_vouchers v
          JOIN sales s ON s.id = v.sale_id
          WHERE v.settled_at IS NULL
@@ -165,12 +183,16 @@ pub fn listar_abertas(
                 row.get::<_, String>(4)?,
                 row.get::<_, Option<String>>(5)?,
                 row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, i64>(8)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut fichas = Vec::with_capacity(bases.len());
-    for (id, sale_id, sale_number, customer_name, created_at, settled_at, code) in bases {
+    for (id, sale_id, sale_number, customer_name, created_at, settled_at, code, kind, pending_cents) in
+        bases
+    {
         fichas.push(CreditVoucher {
             items: itens_da_ficha(connection, &id)?,
             id,
@@ -178,6 +200,8 @@ pub fn listar_abertas(
             sale_number,
             code,
             customer_name,
+            kind,
+            pending_cents,
             created_at,
             settled_at,
         });
@@ -349,35 +373,97 @@ pub fn retirar(
     )?;
     transaction.commit()?;
 
-    let itens = itens_da_ficha(connection, &voucher_id)?;
-    let (sale_id, sale_number, customer_name, created_at, settled_at, code) = connection.query_row(
-        "SELECT v.sale_id, s.sale_number, v.customer_name, v.created_at, v.settled_at, v.code
-         FROM credit_vouchers v JOIN sales s ON s.id = v.sale_id WHERE v.id = ?1",
-        params![voucher_id],
-        |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-            ))
-        },
-    )?;
-    Ok(CreditVoucher {
-        id: voucher_id,
-        sale_id,
-        sale_number,
-        code,
-        customer_name,
-        created_at,
-        settled_at,
-        items: itens,
-    })
+    por_id(connection, actor, &voucher_id)
 }
 
 /// Consome do lote que vence primeiro, como a venda faz.
+/// Paga uma pendência na retirada da bolsa.
+///
+/// A venda já saiu com a mercadoria; o que faltava era o dinheiro. Aqui ele
+/// entra no turno aberto AGORA (não no turno da venda), porque é na gaveta de
+/// hoje que ele vai estar na conferência. A venda passa a contar como paga.
+pub fn liquidar_pendencia(
+    connection: &mut Connection,
+    actor: &LocalUser,
+    input: SettlePendingInput,
+) -> AppResult<CreditVoucher> {
+    require(actor, "credit.withdraw")?;
+    if input.cash_cents < 0 || input.card_cents < 0 {
+        return Err(AppError::Validation("os valores pagos não podem ser negativos".into()));
+    }
+    let now = Utc::now().to_rfc3339();
+    let transaction = connection.transaction()?;
+
+    let (sale_id, kind, settled, pending_cents): (String, String, bool, i64) = transaction
+        .query_row(
+            "SELECT v.sale_id, v.kind, v.settled_at IS NOT NULL, s.pending_cents
+             FROM credit_vouchers v JOIN sales s ON s.id = v.sale_id WHERE v.id = ?1",
+            params![input.voucher_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?
+        .ok_or(AppError::NotFound)?;
+    if kind != "pendencia" {
+        return Err(AppError::Validation("esta ficha já foi paga no caixa".into()));
+    }
+    if settled || pending_cents <= 0 {
+        return Err(AppError::Conflict("esta pendência já foi paga".into()));
+    }
+    if input.card_cents > pending_cents {
+        return Err(AppError::Validation(
+            "maquininha não pode ultrapassar o valor da pendência".into(),
+        ));
+    }
+    let pago = input.cash_cents + input.card_cents;
+    if pago < pending_cents {
+        return Err(AppError::Validation("valor pago insuficiente".into()));
+    }
+    let troco = if input.cash_cents > 0 { pago - pending_cents } else { 0 };
+
+    // O dinheiro entra no turno de agora: é a gaveta que vai ser conferida.
+    let exige_caixa = crate::params::booleano(&transaction, "venda.exige_caixa_aberto", true);
+    let session_id: Option<String> = transaction
+        .query_row("SELECT id FROM cash_sessions WHERE status = 'aberta'", [], |row| row.get(0))
+        .optional()?;
+    if exige_caixa && session_id.is_none() {
+        return Err(AppError::Validation("abra o turno antes de receber a pendência".into()));
+    }
+
+    transaction.execute(
+        "UPDATE sales
+         SET cash_tendered_cents = ?1, card_cents = ?2, change_cents = ?3, pending_cents = 0,
+             cash_session_id = COALESCE(?4, cash_session_id), revision = revision + 1
+         WHERE id = ?5 AND pending_cents > 0",
+        params![input.cash_cents, input.card_cents, troco, session_id, sale_id],
+    )?;
+    let fechou = transaction.execute(
+        "UPDATE credit_vouchers SET settled_at = ?1 WHERE id = ?2 AND settled_at IS NULL",
+        params![now, input.voucher_id],
+    )?;
+    if fechou != 1 {
+        return Err(AppError::Conflict("esta pendência já foi paga".into()));
+    }
+    transaction.execute(
+        "INSERT INTO audit_events (id, actor_id, action, entity_type, entity_id, after_json, occurred_at)
+         VALUES (?1, ?2, 'credit.settle', 'credit', ?3, ?4, ?5)",
+        params![
+            Uuid::new_v4().to_string(),
+            actor.id,
+            input.voucher_id,
+            serde_json::json!({
+                "sale_id": sale_id,
+                "cash_cents": input.cash_cents,
+                "card_cents": input.card_cents,
+                "change_cents": troco,
+            })
+            .to_string(),
+            now
+        ],
+    )?;
+    transaction.commit()?;
+    por_id(connection, actor, &input.voucher_id)
+}
+
 fn consumir_lotes(
     transaction: &rusqlite::Transaction<'_>,
     product_id: &str,
@@ -453,7 +539,7 @@ mod tests {
             client_sale_id: "v1".into(),
             items: vec![SaleItemInput { product_id: "p1".into(), quantity: 1, credit: true }],
             cash_tendered_cents: 1000, card_cents: 0, pix_cents: 0, discount_cents: 0, discount_reason: String::new(), customer_name: String::new(),
-            credit_customer: Some("João da mesa 4".into()),
+            credit_customer: Some("João da mesa 4".into()), pending: false,
         }).unwrap();
         c
     }
@@ -550,7 +636,7 @@ mod tests {
             client_sale_id: "v1".into(),
             items: vec![SaleItemInput { product_id: "p1".into(), quantity: 1, credit: true }],
             cash_tendered_cents: 1000, card_cents: 0, pix_cents: 0, discount_cents: 0, discount_reason: String::new(), customer_name: String::new(),
-            credit_customer: None,
+            credit_customer: None, pending: false,
         }).unwrap();
         let fichas = listar_abertas(&c, &ator(), "").unwrap();
         assert_eq!(fichas.len(), 1);
@@ -577,7 +663,7 @@ mod tests {
                 SaleItemInput { product_id: "p1".into(), quantity: 2, credit: true },
             ],
             cash_tendered_cents: 5000, card_cents: 0, pix_cents: 0, discount_cents: 0, discount_reason: String::new(), customer_name: String::new(),
-            credit_customer: Some("Maria".into()),
+            credit_customer: Some("Maria".into()), pending: false,
         });
         assert!(matches!(mista, Err(AppError::Validation(_))), "ficha é um produto por papel");
         assert_eq!(saldo(&c).0, 10, "nada saiu");
@@ -587,7 +673,7 @@ mod tests {
             client_sale_id: "v3".into(),
             items: vec![SaleItemInput { product_id: "p1".into(), quantity: 2, credit: true }],
             cash_tendered_cents: 2000, card_cents: 0, pix_cents: 0, discount_cents: 0, discount_reason: String::new(), customer_name: String::new(),
-            credit_customer: None,
+            credit_customer: None, pending: false,
         });
         assert!(matches!(dupla, Err(AppError::Validation(_))), "ficha é uma unidade por papel");
     }
@@ -605,4 +691,75 @@ mod tests {
             Err(AppError::Forbidden)
         ));
     }
+    #[test]
+    fn pendencia_leva_agora_e_so_entra_no_caixa_ao_pagar() {
+        let mut c = cenario();
+        let venda = sales::finalize(&mut c, &ator(), FinalizeSaleInput {
+            client_sale_id: "pend-1".into(),
+            items: vec![SaleItemInput { product_id: "p1".into(), quantity: 1, credit: false }],
+            cash_tendered_cents: 0, card_cents: 0, pix_cents: 0, discount_cents: 0,
+            discount_reason: String::new(), customer_name: String::new(),
+            credit_customer: Some("Bolsa 12".into()), pending: true,
+        }).unwrap();
+        // A mercadoria saiu com o cliente: estoque baixa na hora.
+        // A ficha do cenário não baixa (10 ficam); a pendência baixa 1 na hora.
+        assert_eq!(saldo(&c).0, 9);
+
+        let (cash, pend): (i64, i64) = c.query_row(
+            "SELECT cash_tendered_cents, pending_cents FROM sales WHERE id = ?1",
+            [&venda.id], |r| Ok((r.get(0)?, r.get(1)?)),
+        ).unwrap();
+        assert_eq!((cash, pend), (0, 1000), "nada entrou no caixa; o valor ficou pendente");
+
+        let abertas = listar_abertas(&c, &ator(), "").unwrap();
+        let pendencia = abertas.iter().find(|v| v.kind == "pendencia").expect("pendência em aberto");
+        assert_eq!(pendencia.pending_cents, 1000);
+        assert_eq!(pendencia.items[0].taken_quantity, 1, "já retirado: foi com a bolsa");
+
+        // Pagar com valor menor é recusado; pagar certo quita e entra no caixa.
+        let pouco = liquidar_pendencia(&mut c, &ator(), SettlePendingInput {
+            voucher_id: pendencia.id.clone(), cash_cents: 500, card_cents: 0,
+        });
+        assert!(matches!(pouco, Err(AppError::Validation(_))));
+        let paga = liquidar_pendencia(&mut c, &ator(), SettlePendingInput {
+            voucher_id: pendencia.id.clone(), cash_cents: 2000, card_cents: 0,
+        }).unwrap();
+        assert!(paga.settled_at.is_some());
+        assert_eq!(paga.pending_cents, 0);
+        let (cash, troco, pend): (i64, i64, i64) = c.query_row(
+            "SELECT cash_tendered_cents, change_cents, pending_cents FROM sales WHERE id = ?1",
+            [&venda.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ).unwrap();
+        assert_eq!((cash, troco, pend), (2000, 1000, 0));
+        // Pagar de novo não passa.
+        assert!(matches!(
+            liquidar_pendencia(&mut c, &ator(), SettlePendingInput {
+                voucher_id: pendencia.id.clone(), cash_cents: 1000, card_cents: 0,
+            }),
+            Err(AppError::Conflict(_))
+        ));
+        assert!(listar_abertas(&c, &ator(), "").unwrap().iter().all(|v| v.kind != "pendencia"));
+    }
+
+    #[test]
+    fn pendencia_com_dois_itens_ou_com_pagamento_e_recusada() {
+        let mut c = cenario();
+        let dois = sales::finalize(&mut c, &ator(), FinalizeSaleInput {
+            client_sale_id: "pend-2".into(),
+            items: vec![SaleItemInput { product_id: "p1".into(), quantity: 2, credit: false }],
+            cash_tendered_cents: 0, card_cents: 0, pix_cents: 0, discount_cents: 0,
+            discount_reason: String::new(), customer_name: String::new(),
+            credit_customer: None, pending: true,
+        });
+        assert!(matches!(dois, Err(AppError::Validation(_))));
+        let pago = sales::finalize(&mut c, &ator(), FinalizeSaleInput {
+            client_sale_id: "pend-3".into(),
+            items: vec![SaleItemInput { product_id: "p1".into(), quantity: 1, credit: false }],
+            cash_tendered_cents: 1000, card_cents: 0, pix_cents: 0, discount_cents: 0,
+            discount_reason: String::new(), customer_name: String::new(),
+            credit_customer: None, pending: true,
+        });
+        assert!(matches!(pago, Err(AppError::Validation(_))));
+    }
+
 }

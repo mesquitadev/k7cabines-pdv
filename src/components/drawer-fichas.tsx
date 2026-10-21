@@ -3,6 +3,8 @@ import { toast } from "sonner";
 import { Printer, Search, Ticket } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { CampoMoeda } from "@/components/campo-moeda";
+import { imprimirCupom } from "@/lib/impressao";
 import { PainelLateral, SecaoForm } from "@/components/painel-lateral";
 import { Rotulo } from "@/components/placa";
 import { desktop, desktopToken, type LocalCreditVoucher } from "@/lib/desktop";
@@ -14,6 +16,11 @@ import { cn } from "@/lib/utils";
  * A busca é por nome ou por número do pedido. Não há cadastro de cliente — o
  * nome é apelido de fila, e o número do pedido resolve homônimo.
  */
+
+const dinheiro = (centavos: number) =>
+  (centavos / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+type Filtro = "todas" | "ficha" | "pendencia";
 
 const hora = (iso: string) =>
   new Date(iso).toLocaleString("pt-BR", {
@@ -36,6 +43,9 @@ export function DrawerFichas({
   const [busca, setBusca] = useState("");
   const [fichas, setFichas] = useState<LocalCreditVoucher[]>([]);
   const [ocupado, setOcupado] = useState(false);
+  const [filtro, setFiltro] = useState<Filtro>("todas");
+  /* Pendência sendo recebida: id → valores digitados. */
+  const [recebendo, setRecebendo] = useState<{ id: string; cash: number; card: number } | null>(null);
   /* Chave da retirada em curso: dois cliques entregam uma vez só. */
   const idRetirada = useRef(crypto.randomUUID());
 
@@ -74,6 +84,35 @@ export function DrawerFichas({
     }
   };
 
+  /** Recebe a pendência: o dinheiro entra no turno de agora e o cupom sai. */
+  const receber = async (f: LocalCreditVoucher) => {
+    const token = desktopToken();
+    if (!token || !recebendo || recebendo.id !== f.id) return;
+    if (recebendo.cash + recebendo.card < f.pending_cents) {
+      return toast.error("Valor pago é menor que a pendência");
+    }
+    setOcupado(true);
+    try {
+      await desktop.settlePending(token, {
+        voucher_id: f.id,
+        cash_cents: recebendo.cash,
+        card_cents: recebendo.card,
+      });
+      const troco = recebendo.cash > 0 ? recebendo.cash + recebendo.card - f.pending_cents : 0;
+      toast.success(
+        troco > 0 ? `Pendência recebida · troco ${dinheiro(troco)}` : "Pendência recebida",
+      );
+      setRecebendo(null);
+      await imprimirCupom(f.sale_id);
+      await carregar(busca);
+      await onRetirou();
+    } catch (erro) {
+      toast.error(typeof erro === "string" ? erro : "Não foi possível receber");
+    } finally {
+      setOcupado(false);
+    }
+  };
+
   const retirar = async (itemId: string, produto: string) => {
     const token = desktopToken();
     if (!token) return;
@@ -100,8 +139,8 @@ export function DrawerFichas({
       aberto={aberto}
       onAbertoMudou={(a) => !a && onFechar()}
       icone={Ticket}
-      titulo="Fichas em aberto"
-      descricao="Pago no caixa, retirado aos poucos"
+      titulo="Fichas e pendências"
+      descricao="Ficha: pagou, retira depois · Pendência: levou, paga na retirada"
       largura="sm:max-w-xl"
       rodape={
         <Button variant="outline" className="h-11 rounded-sm px-5" onClick={onFechar}>
@@ -124,20 +163,59 @@ export function DrawerFichas({
             className="campo h-12 rounded-sm pl-10"
           />
         </div>
+        <div className="mt-3 flex gap-1" role="tablist" aria-label="Tipo">
+          {(
+            [
+              ["todas", "Todas"],
+              ["ficha", "Fichas"],
+              ["pendencia", "Pendências"],
+            ] as const
+          ).map(([valor, rotulo]) => (
+            <button
+              key={valor}
+              type="button"
+              role="tab"
+              aria-selected={filtro === valor}
+              onClick={() => setFiltro(valor)}
+              className={cn(
+                "rotulo h-10 border px-3 text-[11px] transition-colors",
+                filtro === valor
+                  ? "border-transparent bg-secondary text-foreground"
+                  : "border-border text-muted-foreground hover:bg-accent",
+              )}
+            >
+              {rotulo}
+              <span className="num ml-1.5 opacity-70">
+                {valor === "todas" ? fichas.length : fichas.filter((f) => f.kind === valor).length}
+              </span>
+            </button>
+          ))}
+        </div>
       </SecaoForm>
 
-      {fichas.length === 0 ? (
+      {fichas.filter((f) => filtro === "todas" || f.kind === filtro).length === 0 ? (
         <p className="py-10 text-center text-sm text-muted-foreground">
           {busca.trim()
-            ? `Nenhuma ficha em aberto para “${busca.trim()}”.`
-            : "Nenhuma ficha em aberto no momento."}
+            ? `Nada em aberto para “${busca.trim()}”.`
+            : "Nenhuma ficha ou pendência em aberto no momento."}
         </p>
       ) : (
         <div className="space-y-3">
-          {fichas.map((f) => (
-            <section key={f.id} className="placa p-4">
+          {fichas
+            .filter((f) => filtro === "todas" || f.kind === filtro)
+            .map((f) => (
+            <section
+              key={f.id}
+              className={cn("placa p-4", f.kind === "pendencia" && "border-warning")}
+            >
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <h3 className="text-lg">
+                  <span
+                    className="rotulo mr-2 text-[10px]"
+                    style={{ color: f.kind === "pendencia" ? "var(--warning)" : "var(--success)" }}
+                  >
+                    {f.kind === "pendencia" ? "Pendência" : "Ficha"}
+                  </span>
                   {f.code && <span className="num font-bold">K7-{f.code}</span>}
                   {f.code && f.customer_name && " · "}
                   {f.customer_name}
@@ -158,6 +236,87 @@ export function DrawerFichas({
                 </div>
               </div>
 
+              {f.kind === "pendencia" ? (
+                <div className="mt-3 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      {f.items.map((i) => (
+                        <div key={i.id} className="font-semibold">
+                          {i.quantity}× {i.product_name}
+                        </div>
+                      ))}
+                      <div className="rotulo num text-[10px] text-muted-foreground">
+                        levou na hora · paga na retirada
+                      </div>
+                    </div>
+                    <div className="num text-2xl font-bold">{dinheiro(f.pending_cents)}</div>
+                  </div>
+                  {recebendo?.id === f.id ? (
+                    <div className="space-y-2 border-t border-border pt-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <CampoMoeda
+                            id={`cash-${f.id}`}
+                            rotulo="Dinheiro"
+                            centavos={recebendo.cash}
+                            onChange={(c) =>
+                              setRecebendo({
+                                id: f.id,
+                                cash: c,
+                                card: Math.max(f.pending_cents - c, 0),
+                              })
+                            }
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <CampoMoeda
+                            id={`card-${f.id}`}
+                            rotulo="Maquininha"
+                            centavos={recebendo.card}
+                            onChange={(c) =>
+                              setRecebendo({ id: f.id, cash: recebendo.cash, card: Math.min(c, f.pending_cents) })
+                            }
+                          />
+                        </div>
+                      </div>
+                      {recebendo.cash + recebendo.card > f.pending_cents && recebendo.cash > 0 && (
+                        <p className="num text-xs text-muted-foreground">
+                          troco {dinheiro(recebendo.cash + recebendo.card - f.pending_cents)}
+                        </p>
+                      )}
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          variant="outline"
+                          className="h-11 rounded-sm px-4"
+                          onClick={() => setRecebendo(null)}
+                          disabled={ocupado}
+                        >
+                          Cancelar
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          className="acao-receber h-11 rounded-sm px-5 font-bold uppercase"
+                          style={{ fontFamily: "var(--font-display)" }}
+                          onClick={() => receber(f)}
+                          disabled={ocupado || recebendo.cash + recebendo.card < f.pending_cents}
+                        >
+                          Confirmar e imprimir
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      className="acao-receber h-12 w-full rounded-sm font-bold uppercase"
+                      style={{ fontFamily: "var(--font-display)" }}
+                      disabled={ocupado}
+                      onClick={() => setRecebendo({ id: f.id, cash: f.pending_cents, card: 0 })}
+                    >
+                      Receber {dinheiro(f.pending_cents)}
+                    </Button>
+                  )}
+                </div>
+              ) : (
               <div className="mt-3 divide-y divide-border">
                 {f.items.map((i) => {
                   const resta = i.quantity - i.taken_quantity;
@@ -189,6 +348,7 @@ export function DrawerFichas({
                   );
                 })}
               </div>
+              )}
             </section>
           ))}
         </div>

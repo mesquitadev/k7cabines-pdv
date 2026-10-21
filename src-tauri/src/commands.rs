@@ -9,11 +9,11 @@ use crate::{
         AddStockInput, AppInfo, BackupFile, CashMovement, CashSession, Category, CategoryInput,
         CashSessionSummary, ChangePasswordInput, CompletedSale, CreateProductInput,
         DeleteSaleInput, Dre, FinalizeSaleInput, LocalUser, LoginInput, Product,
-        CreateUserInput, ManagedUser, ProductBatch, RemoveStockInput, ReportDeletedSale,
+        CreateUserInput, ManagedUser, ProductBatch, RemoveStockInput, ReportDeletedSale, ReportReturn,
         ReportItem, ReportMovement, ReportRange, ReportSale, SessionResponse, TicketSettings,
         InventoryCountInput, PermissionInfo, ReturnInput, Role, SaleItemForReturn, SetupInput,
         CreditVoucher, PrinterSettings, RoleInput, SetupStatus, Supplier, SupplierInput, SupplierPurchase, SystemParam, TemplateResumo,
-        UpdateProductInput, UpdateUserInput, VendasDoTurno, WithdrawCreditInput,
+        UpdateProductInput, UpdateUserInput, VendasDoTurno, SettlePendingInput, WithdrawCreditInput,
     },
     cash, categories, credito, params, printing, products, reports, returns, sales, settings, setup,
     stock,
@@ -315,6 +315,7 @@ relatorio!(report_sales, reports::sales, ReportSale);
 relatorio!(report_items, reports::items, ReportItem);
 relatorio!(report_movements, reports::movements, ReportMovement);
 relatorio!(report_deleted_sales, reports::deleted_sales, ReportDeletedSale);
+relatorio!(report_returns, reports::returns, ReportReturn);
 
 #[tauri::command]
 pub fn delete_sale(
@@ -582,6 +583,7 @@ pub fn cash_movements(
 #[tauri::command]
 pub fn cash_close(
     counted_cents: i64,
+    counted_card_cents: i64,
     notes: Option<String>,
     token: String,
     state: State<'_, AppState>,
@@ -591,7 +593,7 @@ pub fn cash_close(
         .database
         .lock()
         .map_err(|_| "banco local indisponível".to_string())?;
-    cash::fechar(&mut database, &actor, counted_cents, notes).map_err(Into::into)
+    cash::fechar(&mut database, &actor, counted_cents, counted_card_cents, notes).map_err(Into::into)
 }
 
 #[tauri::command]
@@ -1026,6 +1028,20 @@ pub fn list_credit_vouchers(
         .lock()
         .map_err(|_| "banco local indisponível".to_string())?;
     credito::listar_abertas(&database, &actor, &search).map_err(Into::into)
+}
+
+#[tauri::command]
+pub fn settle_pending(
+    input: SettlePendingInput,
+    token: String,
+    state: State<'_, AppState>,
+) -> Result<CreditVoucher, String> {
+    let actor = state.user_for(&token).map_err(String::from)?;
+    let mut database = state
+        .database
+        .lock()
+        .map_err(|_| "banco local indisponível".to_string())?;
+    credito::liquidar_pendencia(&mut database, &actor, input).map_err(Into::into)
 }
 
 #[tauri::command]

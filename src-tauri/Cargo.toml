@@ -1,6 +1,6 @@
 [package]
 name = "k7-cabines"
-version = "0.2.2"
+version = "0.3.0"
 description = "K7 Cabines desktop offline"
 authors = ["Dizevolv"]
 edition = "2021"

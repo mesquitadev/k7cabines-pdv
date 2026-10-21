@@ -9,10 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { RefreshCcw, Printer, Trash2, Undo2 } from "lucide-react";
+import { RefreshCcw, Printer, Undo2 } from "lucide-react";
 import { DrawerDevolucao } from "@/components/drawer-devolucao";
 import { imprimirCupom } from "@/lib/impressao";
 import { PainelDre } from "@/components/painel-dre";
@@ -39,9 +37,10 @@ interface StockAddition {
   id: string; product_code: string; product_name: string; category: string;
   quantity: number; operator_name: string; created_at: string;
 }
-interface DeletedSale {
-  id: string; sale_number: number; sale_total: number; sale_created_at: string;
-  operator_name: string; deleted_by_name: string; deleted_at: string; reason: string;
+/** Item alterado (removido de um pedido) no período. */
+interface AlteredItem {
+  id: string; sale_number: number; product_name: string; quantity: number; amount: number;
+  refund_kind: string; actor_name: string; reason: string; occurred_at: string;
 }
 
 const fmt = (n: number) => n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -92,14 +91,13 @@ export default function Relatorios() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [items, setItems] = useState<SaleItem[]>([]);
   const [additions, setAdditions] = useState<StockAddition[]>([]);
-  const [deletedSales, setDeletedSales] = useState<DeletedSale[]>([]);
-  
-  const [deleteTarget, setDeleteTarget] = useState<Sale | null>(null);
+  const [alteredItems, setAlteredItems] = useState<AlteredItem[]>([]);
+
   const [dre, setDre] = useState<LocalDre | null>(null);
   const [turnos, setTurnos] = useState<CashSession[]>([]);
+  /* Fichas pagas e não retiradas, pendências retiradas e não pagas: em aberto agora. */
+  const [emAberto, setEmAberto] = useState({ fichas: 0, pendencias: 0, pendenteCents: 0 });
   const [devolucaoAlvo, setDevolucaoAlvo] = useState<{ id: string; sale_number: number; total_cents: number } | null>(null);
-  const [deleteReason, setDeleteReason] = useState("");
-  const [deleting, setDeleting] = useState(false);
 
   // Limite de histórico vem do perfil (Configurações › Usuários › Perfil).
   // Vazio = sem limite. O Rust recusa consulta fora do limite de qualquer jeito.
@@ -126,8 +124,8 @@ export default function Relatorios() {
     setTo((t) => (t > todayStr ? todayStr : t));
   }, [minDate, todayStr]);
 
-  // Apenas gerente pode excluir vendas de dias anteriores
-  const canDeleteSale = (sale: Sale) => {
+  // Apenas gerente/master pode alterar vendas de dias anteriores
+  const canAlterSale = (sale: Sale) => {
     if (role === "gerente" || role === "master") return true;
     const d = new Date(sale.created_at);
     const local = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -137,47 +135,29 @@ export default function Relatorios() {
   /** Reimprimir é um comando: o Rust relê a venda do banco e monta os bytes. */
   const handleReprint = (sale: Sale) => imprimirCupom(sale.id);
 
-  const openDelete = (sale: Sale) => {
-    setDeleteTarget(sale);
-    setDeleteReason("");
-  };
-
-  const confirmDelete = async () => {
-    if (!deleteTarget) return;
-    const reason = deleteReason.trim();
-    if (reason.length < 3) return toast.error("Informe o motivo (mín. 3 caracteres)");
-    if (!localToken) return toast.error("Sessão local expirada. Entre novamente.");
-    setDeleting(true);
-    try {
-      await desktop.deleteSale(localToken, { sale_id: deleteTarget.id, reason });
-    } catch (e) {
-      return toast.error(typeof e === "string" ? e : "Não foi possível excluir a venda");
-    } finally {
-      setDeleting(false);
-    }
-    toast.success(`Venda #${deleteTarget.sale_number} excluída`);
-    setDeleteTarget(null);
-    setDeleteReason("");
-    load();
-  };
-
-
-
   // Desktop: tudo vem do SQLite local, via comandos Rust.
   const loadLocal = async () => {
     if (!localToken) return;
     const range = { from, to };
     const reais = (centavos: number) => centavos / 100;
-    const [vendas, itens, movimentos, excluidas, resultado, sessoes] = await Promise.all([
+    const [vendas, itens, movimentos, alteracoes, resultado, sessoes, fichas] = await Promise.all([
       desktop.reportSales(localToken, range).catch(() => []),
       desktop.reportItems(localToken, range).catch(() => []),
       desktop.reportMovements(localToken, range).catch(() => []),
-      desktop.reportDeletedSales(localToken, range).catch(() => []),
+      desktop.reportReturns(localToken, range).catch(() => []),
       pode("reports.result") ? desktop.reportDre(localToken, range).catch(() => null) : Promise.resolve(null),
       desktop.listCashSessions(localToken, range).catch(() => []),
+      desktop.listCreditVouchers(localToken).catch(() => []),
     ]);
     setDre(resultado);
     setTurnos(sessoes);
+    setEmAberto({
+      fichas: fichas.filter((f) => f.kind !== "pendencia").length,
+      pendencias: fichas.filter((f) => f.kind === "pendencia").length,
+      pendenteCents: fichas
+        .filter((f) => f.kind === "pendencia")
+        .reduce((soma, f) => soma + (f.pending_cents ?? 0), 0),
+    });
     setSales(vendas.map((v) => ({
       id: v.id, sale_number: v.sale_number, operator_name: v.operator_name,
       total: reais(v.total_cents), cash_amount: reais(v.cash_cents),
@@ -192,10 +172,10 @@ export default function Relatorios() {
       id: m.id, product_code: "", product_name: m.product_name, category: m.reason,
       quantity: m.delta, operator_name: m.actor_name, created_at: m.occurred_at,
     })));
-    setDeletedSales(excluidas.map((d, idx) => ({
-      id: `${d.sale_number}-${idx}`, sale_number: d.sale_number, sale_total: reais(d.total_cents),
-      sale_created_at: d.deleted_at, operator_name: d.operator_name,
-      deleted_by_name: d.deleted_by_name, deleted_at: d.deleted_at, reason: d.reason,
+    setAlteredItems(alteracoes.map((a, idx) => ({
+      id: `${a.sale_number}-${idx}`, sale_number: a.sale_number, product_name: a.product_name,
+      quantity: a.quantity, amount: reais(a.amount_cents), refund_kind: a.refund_kind,
+      actor_name: a.actor_name, reason: a.reason, occurred_at: a.occurred_at,
     })));
   };
 
@@ -287,12 +267,17 @@ export default function Relatorios() {
       });
     }
     lines.push("");
-    lines.push(`*Vendas excluídas: ${deletedSales.length}*`);
-    if (deletedSales.length) {
-      const totalExcl = deletedSales.reduce((s, d) => s + Number(d.sale_total), 0);
-      lines.push(`Valor total excluído: ${fmt(totalExcl)}`);
-      deletedSales.forEach((d) => {
-        lines.push(`- #${String(d.sale_number).padStart(5, "0")} · ${fmt(Number(d.sale_total))} · excluída por ${d.deleted_by_name || "-"} · ${fmtTime(d.deleted_at)} · motivo: ${d.reason || "-"}`);
+    lines.push(`*Fichas em aberto: ${emAberto.fichas}* (pagas e não retiradas)`);
+    lines.push(
+      `*Pendências em aberto: ${emAberto.pendencias}${emAberto.pendencias ? ` · ${fmt(emAberto.pendenteCents / 100)}` : ""}* (retiradas e não pagas)`,
+    );
+    lines.push("");
+    lines.push(`*Itens alterados: ${alteredItems.length}*`);
+    if (alteredItems.length) {
+      const totalAlt = alteredItems.reduce((s, a) => s + Number(a.amount), 0);
+      lines.push(`Valor retirado dos pedidos: ${fmt(totalAlt)}`);
+      alteredItems.forEach((a) => {
+        lines.push(`- #${String(a.sale_number).padStart(5, "0")} · ${a.quantity}× ${a.product_name} · ${fmt(Number(a.amount))} · ${a.actor_name || "-"} · ${fmtTime(a.occurred_at)} · motivo: ${a.reason || "-"}`);
       });
     }
     return lines.join("\n");
@@ -319,14 +304,13 @@ export default function Relatorios() {
       </div>
 
       {/* Totais do período: só para quem tem "Resultado financeiro". */}
-      {pode("reports.result") && (
-        <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Stat label="Total" value={fmt(summary.total)} highlight />
-          <Stat label="Dinheiro" value={fmt(summary.cash)} />
-          <Stat label="Maquininha" value={fmt(summary.card)} />
-          <Stat label="Vendas" value={String(summary.count)} />
-        </div>
-      )}
+      {/* O geral do período é de quem opera; só o lucro (aba Resultado) é restrito. */}
+      <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Stat label="Total" value={fmt(summary.total)} highlight />
+        <Stat label="Dinheiro" value={fmt(summary.cash)} />
+        <Stat label="Maquininha" value={fmt(summary.card)} />
+        <Stat label="Vendas" value={String(summary.count)} />
+      </div>
 
       {(() => {
         const isManager = role === "gerente" || role === "master";
@@ -406,15 +390,12 @@ export default function Relatorios() {
                                 total_cents: Math.round(Number(s.total) * 100),
                               })
                             }
-                            title={canDeleteSale(s) ? "Devolver item desta venda" : "Apenas vendas do dia vigente podem ser devolvidas"}
-                            disabled={!canDeleteSale(s)}
+                            title={canAlterSale(s) ? "Alterar este pedido: remover unidades com motivo" : "Apenas vendas do dia vigente podem ser alteradas"}
+                            disabled={!canAlterSale(s)}
                           >
-                            <Undo2 className="mr-1 h-3 w-3" /> Devolver
+                            <Undo2 className="mr-1 h-3 w-3" /> Alterar
                           </Button>
                         )}
-                        <Button size="sm" variant="ghost" className="acao-destrutiva" onClick={() => openDelete(s)} title={canDeleteSale(s) ? "Excluir venda" : "Apenas vendas do dia vigente podem ser excluídas"} disabled={!canDeleteSale(s)}>
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -459,6 +440,12 @@ export default function Relatorios() {
 
             const cur = computeStats(currentDay, currentHour);
             const prev = computeStats(prevDay, prevHour);
+            // Total do período filtrado: o que a foto do hora em hora não mostra sozinha.
+            const totalItens = sales.reduce((a, s) => a + Number(s.items_count), 0);
+            const totalValor = sales.reduce((a, s) => a + Number(s.total), 0);
+            const totalPulseiras = items
+              .filter((i) => i.category.toLowerCase().includes("pulseira"))
+              .reduce((a, i) => a + Number(i.quantity), 0);
             return (
               <Card>
                 <div className="grid gap-3 p-4 sm:grid-cols-4">
@@ -472,6 +459,12 @@ export default function Relatorios() {
                   <Stat label="Pulseiras / Itens" value={`${prev.pulseiras} / ${prev.itens}`} highlight />
                   <Stat label="Bebidas / Itens" value={`${prev.bebidas} / ${prev.itens}`} highlight />
                   <Stat label="Produtos Eróticos / Itens" value={`${prev.eroticos} / ${prev.itens}`} highlight />
+                </div>
+                <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-t border-border/60 px-4 py-2.5 text-xs text-muted-foreground">
+                  <span className="rotulo">Total até agora · {from === to ? "hoje" : "período"}</span>
+                  <span className="num">
+                    {sales.length} venda(s) · {totalItens} item(ns) · {totalPulseiras} pulseira(s) · {fmt(totalValor)}
+                  </span>
                 </div>
               </Card>
             );
@@ -586,7 +579,17 @@ export default function Relatorios() {
                         </div>
                       </div>
                       <div className="num text-right text-xs text-muted-foreground">
-                        esperado {fmt((t.expected_cash_cents ?? 0) / 100)}
+                        <div>gaveta {fmt((t.expected_cash_cents ?? 0) / 100)}</div>
+                        {t.expected_card_cents !== null && t.expected_card_cents !== undefined && (
+                          <div>
+                            maquininha {fmt(t.expected_card_cents / 100)}
+                            {t.card_difference_cents !== null && t.card_difference_cents !== undefined && t.card_difference_cents !== 0 && (
+                              <span style={{ color: t.card_difference_cents < 0 ? "var(--destructive)" : "var(--warning)" }}>
+                                {" "}({t.card_difference_cents < 0 ? "falta" : "sobra"} {fmt(Math.abs(t.card_difference_cents) / 100)})
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
                       <div className="min-w-[10rem] text-right">
                         {t.status === "aberta" ? (
@@ -626,18 +629,32 @@ export default function Relatorios() {
 
           <Card className="space-y-3 p-4">
             <div>
-              <Label>Vendas excluídas no período</Label>
-              {deletedSales.length === 0 ? (
-                <p className="mt-1 rounded-lg bg-secondary p-3 text-sm text-muted-foreground">Nenhuma venda excluída.</p>
+              <Label>Fichas e pendências em aberto agora</Label>
+              <div className="mt-1 grid gap-2 sm:grid-cols-2">
+                <div className="rounded-lg bg-secondary p-3 text-sm">
+                  <span className="num text-xl font-bold">{emAberto.fichas}</span> ficha(s)
+                  <span className="block text-xs text-muted-foreground">pagas e ainda não retiradas · sobra no estoque físico</span>
+                </div>
+                <div className="rounded-lg bg-secondary p-3 text-sm">
+                  <span className="num text-xl font-bold">{emAberto.pendencias}</span> pendência(s)
+                  {emAberto.pendencias > 0 && <span className="num"> · {fmt(emAberto.pendenteCents / 100)} a receber</span>}
+                  <span className="block text-xs text-muted-foreground">retiradas e ainda não pagas · falta no caixa</span>
+                </div>
+              </div>
+            </div>
+            <div>
+              <Label>Itens alterados no período</Label>
+              {alteredItems.length === 0 ? (
+                <p className="mt-1 rounded-lg bg-secondary p-3 text-sm text-muted-foreground">Nenhum pedido alterado.</p>
               ) : (
                 <div className="mt-1 rounded-lg border bg-secondary/40 p-3 text-sm">
                   <p className="mb-2 font-semibold text-destructive">
-                    {deletedSales.length} venda(s) excluída(s) · {fmt(deletedSales.reduce((s, d) => s + Number(d.sale_total), 0))}
+                    {alteredItems.length} item(ns) alterado(s) · {fmt(alteredItems.reduce((s, a) => s + Number(a.amount), 0))}
                   </p>
                   <ul className="space-y-1">
-                    {deletedSales.map((d) => (
-                      <li key={d.id}>
-                        #{String(d.sale_number).padStart(5, "0")} · {fmt(Number(d.sale_total))} · excluída por <b>{d.deleted_by_name || "-"}</b> em {fmtDate(d.deleted_at)} · motivo: <i>{d.reason || "-"}</i>
+                    {alteredItems.map((a) => (
+                      <li key={a.id}>
+                        #{String(a.sale_number).padStart(5, "0")} · {a.quantity}× {a.product_name} · {fmt(Number(a.amount))} · por <b>{a.actor_name || "-"}</b> em {fmtDate(a.occurred_at)} · motivo: <i>{a.reason || "-"}</i>
                       </li>
                     ))}
                   </ul>
@@ -653,34 +670,6 @@ export default function Relatorios() {
       </Tabs>
         );
       })()}
-      <Dialog open={!!deleteTarget} onOpenChange={(o) => { if (!o) { setDeleteTarget(null); setDeleteReason(""); } }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Excluir venda {deleteTarget && `#${String(deleteTarget.sale_number).padStart(5, "0")}`}</DialogTitle>
-            <DialogDescription>
-              {deleteTarget && `Valor ${fmt(Number(deleteTarget.total))}. O estoque será devolvido e a exclusão registrada no fechamento.`}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="reason">Motivo da exclusão (obrigatório)</Label>
-            <Textarea
-              id="reason"
-              value={deleteReason}
-              onChange={(e) => setDeleteReason(e.target.value)}
-              placeholder="Descreva por extenso o motivo da exclusão"
-              rows={3}
-              maxLength={500}
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setDeleteTarget(null); setDeleteReason(""); }} disabled={deleting}>Cancelar</Button>
-            <Button variant="destructive" onClick={confirmDelete} disabled={deleting || deleteReason.trim().length < 3}>
-              {deleting ? "Excluindo..." : "Confirmar exclusão"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       <DrawerDevolucao
         venda={devolucaoAlvo}
         onFechar={() => setDevolucaoAlvo(null)}

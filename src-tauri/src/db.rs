@@ -34,8 +34,11 @@ const MIGRATION_027: &str = include_str!("../migrations/027_cliente_na_venda.sql
 const MIGRATION_028: &str = include_str!("../migrations/028_ordem_resultado.sql");
 const MIGRATION_029: &str = include_str!("../migrations/029_piscar.sql");
 const MIGRATION_030: &str = include_str!("../migrations/030_assistente_inicial.sql");
+const MIGRATION_031: &str = include_str!("../migrations/031_conferencia_maquininha.sql");
+const MIGRATION_032: &str = include_str!("../migrations/032_pendencias.sql");
+const MIGRATION_033: &str = include_str!("../migrations/033_validade_por_produto.sql");
 
-pub const LATEST_SCHEMA_VERSION: i64 = 30;
+pub const LATEST_SCHEMA_VERSION: i64 = 33;
 
 pub fn open(path: &Path) -> AppResult<Connection> {
     if let Some(parent) = path.parent() {
@@ -177,6 +180,15 @@ fn migrate(connection: &mut Connection) -> AppResult<()> {
     }
     if current < 30 {
         connection.execute_batch(MIGRATION_030)?;
+    }
+    if current < 31 {
+        connection.execute_batch(MIGRATION_031)?;
+    }
+    if current < 32 {
+        connection.execute_batch(MIGRATION_032)?;
+    }
+    if current < 33 {
+        connection.execute_batch(MIGRATION_033)?;
     }
     Ok(())
 }

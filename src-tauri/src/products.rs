@@ -21,6 +21,7 @@ pub fn list(connection: &Connection) -> AppResult<Vec<Product>> {
                   WHERE m.product_id = p.id AND m.delta > 0 AND m.unit_cost_cents IS NOT NULL
                   ORDER BY m.occurred_at DESC LIMIT 1),
                 p.highlight,
+                p.tracks_expiry,
                 (p.highlight = 1
                   OR EXISTS (SELECT 1 FROM categories c
                               WHERE c.highlight = 1
@@ -57,7 +58,8 @@ pub fn list(connection: &Connection) -> AppResult<Vec<Product>> {
             last_purchase_at: row.get(20)?,
             last_purchase_cents: row.get(21)?,
             highlight: row.get(22)?,
-            highlight_effective: row.get(23)?,
+            tracks_expiry: row.get(23)?,
+            highlight_effective: row.get(24)?,
         })
     })?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -105,11 +107,13 @@ pub fn create(
     transaction.execute(
         "INSERT INTO products (id, code, name, category, subcategory, price_cents, cost_cents,
                                barcode, min_stock, stock_quantity, active, category_id, parent_id,
-                               variant_name, unit, supplier_id, highlight, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 1, ?10, ?11, ?12, ?13, ?14, ?16, ?15, ?15)",
+                               variant_name, unit, supplier_id, highlight, tracks_expiry,
+                               created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 1, ?10, ?11, ?12, ?13, ?14, ?16, ?17, ?15, ?15)",
         params![id, code, name, category, subcategory, input.price_cents, input.cost_cents,
                 barcode, input.min_stock, input.category_id, input.parent_id,
-                input.variant_name.trim(), unit, input.supplier_id, now, input.highlight],
+                input.variant_name.trim(), unit, input.supplier_id, now, input.highlight,
+                crate::stock::tracks_expiry_for(&category, input.tracks_expiry)],
     ).map_err(|error| match error {
         rusqlite::Error::SqliteFailure(ref inner, _) if inner.extended_code == 2067 => {
             AppError::Conflict("já existe um produto com esse código ou código de barras".into())
@@ -178,6 +182,7 @@ mod tests {
             .expect("actor should exist");
         let input = CreateProductInput {
             highlight: false,
+            tracks_expiry: true,
             code: "abc-1".into(),
             name: "Produto".into(),
             category: "Categoria".into(),
@@ -200,6 +205,7 @@ mod tests {
             &manager(),
             CreateProductInput {
                 highlight: false,
+            tracks_expiry: true,
                 code: "ABC-1".into(),
                 name: "Outro".into(),
                 category: "Categoria".into(),
@@ -225,6 +231,7 @@ mod tests {
             &actor,
             CreateProductInput {
                 highlight: false,
+            tracks_expiry: true,
                 code: "ABC-2".into(),
                 name: "Produto".into(),
                 category: "Categoria".into(),

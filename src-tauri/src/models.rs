@@ -124,6 +124,8 @@ pub struct Product {
     pub highlight: bool,
     /// Efetivo: o do produto OU o da categoria. É o que a venda usa.
     pub highlight_effective: bool,
+    /// Exige lote com data de validade nas entradas de estoque.
+    pub tracks_expiry: bool,
     pub active: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -134,6 +136,9 @@ pub struct CreateProductInput {
     /// A venda pisca quando este produto está no pedido.
     #[serde(default)]
     pub highlight: bool,
+    /// Exige lote com validade. Padrão ligado; Pulseiras nunca exigem.
+    #[serde(default = "verdadeiro")]
+    pub tracks_expiry: bool,
     pub code: String,
     pub name: String,
     pub category: String,
@@ -188,6 +193,10 @@ pub struct FinalizeSaleInput {
     /// crédito: é por ele que a retirada é encontrada depois.
     #[serde(default)]
     pub credit_customer: Option<String>,
+    /// Pendência: leva agora, paga na retirada. Um item só; nada entra no
+    /// caixa até `settle_pending`.
+    #[serde(default)]
+    pub pending: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -231,6 +240,8 @@ pub struct ProductBatch {
 pub struct UpdateProductInput {
     #[serde(default)]
     pub highlight: bool,
+    #[serde(default = "verdadeiro")]
+    pub tracks_expiry: bool,
     pub id: String,
     pub code: String,
     pub name: String,
@@ -421,6 +432,19 @@ pub struct ReportMovement {
     pub occurred_at: String,
 }
 
+/// Item alterado (devolvido) no período: o que o fechamento lista.
+#[derive(Debug, Serialize)]
+pub struct ReportReturn {
+    pub sale_number: i64,
+    pub product_name: String,
+    pub quantity: i64,
+    pub amount_cents: i64,
+    pub refund_kind: String,
+    pub actor_name: String,
+    pub reason: String,
+    pub occurred_at: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ReportDeletedSale {
     pub sale_number: i64,
@@ -488,6 +512,12 @@ pub struct CashSession {
     pub expected_cash_cents: Option<i64>,
     pub counted_cash_cents: Option<i64>,
     pub difference_cents: Option<i64>,
+    /// Maquininha: o que as vendas dizem, o que o relatório da máquina diz,
+    /// e a diferença. NULL em turno fechado sem conferir (virada de dia ou
+    /// anterior a esta regra).
+    pub expected_card_cents: Option<i64>,
+    pub counted_card_cents: Option<i64>,
+    pub card_difference_cents: Option<i64>,
     pub notes: Option<String>,
     pub status: String,
     /// Encerrado sem contar a gaveta, na virada de dia. Não tem diferença
@@ -510,6 +540,10 @@ pub struct CashSessionSummary {
     pub deposits_cents: i64,
     pub refunds_cash_cents: i64,
     pub esperado_cents: i64,
+    /// Estornos devolvidos na maquininha neste turno.
+    pub refunds_card_cents: i64,
+    /// O que o relatório da maquininha deve mostrar: cartão vendido menos estornado.
+    pub esperado_maquininha_cents: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -703,6 +737,10 @@ pub struct CreditVoucher {
     pub code: String,
     /// Nome opcional (apelido de fila). Vazio na ficha ao portador.
     pub customer_name: String,
+    /// "ficha" (pagou, retira depois) ou "pendencia" (levou, paga depois).
+    pub kind: String,
+    /// Quanto ainda falta pagar (só pendência; zero quando quitada ou ficha).
+    pub pending_cents: i64,
     pub created_at: String,
     pub settled_at: Option<String>,
     pub items: Vec<CreditVoucherItem>,
@@ -716,6 +754,14 @@ pub struct CreditVoucherItem {
     pub category: String,
     pub quantity: i64,
     pub taken_quantity: i64,
+}
+
+/// Pagamento de uma pendência na retirada da bolsa.
+#[derive(Debug, Deserialize)]
+pub struct SettlePendingInput {
+    pub voucher_id: String,
+    pub cash_cents: i64,
+    pub card_cents: i64,
 }
 
 #[derive(Debug, Deserialize)]

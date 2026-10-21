@@ -45,6 +45,13 @@ pub struct ProdutoModelo {
     /// Piscar na venda, ligado no próprio produto.
     #[serde(default)]
     pub highlight: bool,
+    /// Exige lote com validade. Modelo antigo não traz: fica ligado.
+    #[serde(default = "sim_bool")]
+    pub tracks_expiry: bool,
+}
+
+fn sim_bool() -> bool {
+    true
 }
 
 fn unidade_padrao() -> String {
@@ -181,7 +188,7 @@ fn exportar_interno(
     let produtos = if !selecao.produtos { Vec::new() } else {
         let mut st = connection.prepare(
             "SELECT code, name, category, subcategory, price_cents, cost_cents, barcode, min_stock,
-                    unit, highlight
+                    unit, highlight, tracks_expiry
              FROM products WHERE active = 1 ORDER BY code",
         )?;
         let linhas = st.query_map([], |row| {
@@ -196,6 +203,7 @@ fn exportar_interno(
                 min_stock: row.get(7)?,
                 unit: row.get(8)?,
                 highlight: row.get(9)?,
+                tracks_expiry: row.get(10)?,
             })
         })?;
         linhas.collect::<Result<Vec<_>, _>>()?
@@ -455,11 +463,13 @@ pub fn importar(
                      SET name = ?1, category = ?2, subcategory = ?3, price_cents = ?4,
                          cost_cents = ?5, barcode = COALESCE(?6, barcode), min_stock = ?7,
                          unit = ?10, highlight = ?11, category_id = COALESCE(?12, category_id),
+                         tracks_expiry = ?13,
                          active = 1, revision = revision + 1, updated_at = ?8
                      WHERE id = ?9",
                     params![
                         p.name, p.category, p.subcategory, p.price_cents, p.cost_cents,
-                        p.barcode, p.min_stock, now, id, p.unit, p.highlight, categoria_id
+                        p.barcode, p.min_stock, now, id, p.unit, p.highlight, categoria_id,
+                        p.tracks_expiry
                     ],
                 )?;
                 atualizados += 1;
@@ -468,12 +478,12 @@ pub fn importar(
                 transaction.execute(
                     "INSERT INTO products (id, code, name, category, subcategory, price_cents,
                                            cost_cents, barcode, min_stock, stock_quantity, active,
-                                           unit, highlight, category_id, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 1, ?11, ?12, ?13, ?10, ?10)",
+                                           unit, highlight, category_id, tracks_expiry, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 1, ?11, ?12, ?13, ?14, ?10, ?10)",
                     params![
                         Uuid::new_v4().to_string(), p.code, p.name, p.category, p.subcategory,
                         p.price_cents, p.cost_cents, p.barcode, p.min_stock, now,
-                        p.unit, p.highlight, categoria_id
+                        p.unit, p.highlight, categoria_id, p.tracks_expiry
                     ],
                 )?;
                 criados += 1;

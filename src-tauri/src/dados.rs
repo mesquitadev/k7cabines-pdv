@@ -665,7 +665,7 @@ mod tests {
                 discount_cents: 0,
                 discount_reason: String::new(),
                 customer_name: String::new(),
-                credit_customer: None,
+                credit_customer: None, pending: false,
             },
         )
         .unwrap();

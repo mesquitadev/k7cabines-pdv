@@ -197,7 +197,7 @@ pub fn devolver(
     let gestor = matches!(actor.role.as_str(), "gerente" | "master");
     if !gestor && business_date != hoje {
         return Err(AppError::Validation(
-            "apenas vendas do dia vigente podem ser devolvidas".into(),
+            "apenas vendas do dia vigente podem ser alteradas".into(),
         ));
     }
 
@@ -282,6 +282,41 @@ pub fn devolver(
     // com R$ 2 de desconto, devolver tudo tirava R$ 20 da gaveta contra R$ 18
     // recebidos. O rateio é proporcional ao peso do item na venda.
     let valor = valor_estornavel(&transaction, &sale_id, preco, input.quantity)?;
+
+    // Pedido do cliente (15/10/2026): alterar a venda é uma operação só. O que
+    // sai do pedido sai também do total e do meio de pagamento estornado, para
+    // o ticket, o caixa e os relatórios dizerem o mesmo número sem precisar
+    // "devolver e depois excluir". O desconto rateado da parte devolvida sai
+    // junto, para total = subtotal - desconto continuar valendo.
+    let bruto = preco * input.quantity;
+    let desconto_rateado = (bruto - valor).max(0);
+    transaction.execute(
+        "UPDATE sale_items
+         SET subtotal_cents = MAX(subtotal_cents - ?1, 0),
+             discount_cents = MAX(discount_cents - ?2, 0)
+         WHERE id = ?3",
+        params![bruto, desconto_rateado, input.sale_item_id],
+    )?;
+    if input.refund_kind != "sem_estorno" {
+        let coluna_pagamento = match input.refund_kind.as_str() {
+            "dinheiro" => "cash_tendered_cents",
+            "cartao" => "card_cents",
+            _ => "pix_cents",
+        };
+        transaction.execute(
+            &format!(
+                "UPDATE sales
+                 SET subtotal_cents = MAX(subtotal_cents - ?1, 0),
+                     discount_cents = MAX(discount_cents - ?2, 0),
+                     total_cents = MAX(total_cents - ?3, 0),
+                     {coluna_pagamento} = MAX({coluna_pagamento} - ?3, 0),
+                     revision = revision + 1
+                 WHERE id = ?4"
+            ),
+            params![bruto, desconto_rateado, valor, sale_id],
+        )?;
+    }
+
     transaction.execute(
         "INSERT INTO sale_returns (id, sale_id, sale_item_id, quantity, amount_cents, refund_kind,
                                    reason, restocked, actor_id, actor_name, occurred_at,
@@ -479,7 +514,7 @@ mod tests {
         sales::finalize(&mut c, &ator(), FinalizeSaleInput {
             client_sale_id: "v1".into(),
             items: vec![SaleItemInput { product_id: "p1".into(), quantity: 3, credit: false }],
-            cash_tendered_cents: 2100, card_cents: 0, pix_cents: 0, discount_cents: 0, discount_reason: String::new(), customer_name: String::new(), credit_customer: None,
+            cash_tendered_cents: 2100, card_cents: 0, pix_cents: 0, discount_cents: 0, discount_reason: String::new(), customer_name: String::new(), credit_customer: None, pending: false,
         }).unwrap();
         c
     }
@@ -585,7 +620,7 @@ mod tests {
         sales::finalize(&mut c, &com_desconto, FinalizeSaleInput {
             client_sale_id: "v1".into(),
             items: vec![SaleItemInput { product_id: "p1".into(), quantity: 4, credit: false }],
-            cash_tendered_cents: 1800, card_cents: 0, pix_cents: 0, discount_cents: 200, discount_reason: "teste".into(), customer_name: String::new(), credit_customer: None,
+            cash_tendered_cents: 1800, card_cents: 0, pix_cents: 0, discount_cents: 200, discount_reason: "teste".into(), customer_name: String::new(), credit_customer: None, pending: false,
         }).unwrap();
 
         let item = itens_da_venda(&c, &ator(), &sale_id(&c)).unwrap()[0].sale_item_id.clone();
@@ -599,6 +634,39 @@ mod tests {
             estornado, 1800,
             "estornar o preço cheio devolveria R$ 20 contra R$ 18 recebidos"
         );
+        // A venda inteira foi alterada: total, subtotal, desconto e dinheiro zeram.
+        let (total, subtotal, desconto, dinheiro): (i64, i64, i64, i64) = c.query_row(
+            "SELECT total_cents, subtotal_cents, discount_cents, cash_tendered_cents FROM sales",
+            [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap();
+        assert_eq!((total, subtotal, desconto, dinheiro), (0, 0, 0, 0));
+    }
+
+    /// Alterar a venda é uma operação só: o item sai do pedido e do total.
+    #[test]
+    fn alterar_reduz_o_total_e_o_meio_de_pagamento_da_venda() {
+        let mut c = cenario();
+        let item = itens_da_venda(&c, &ator(), &sale_id(&c)).unwrap()[0].sale_item_id.clone();
+        let (total_antes, dinheiro_antes): (i64, i64) = c.query_row(
+            "SELECT total_cents, cash_tendered_cents FROM sales", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        devolver(&mut c, &ator(), ReturnInput {
+            sale_item_id: item.clone(), quantity: 1, refund_kind: "dinheiro".into(),
+            reason: "bateu errado".into(), restock: true, client_return_id: None,
+        }).unwrap();
+        let (total, dinheiro, item_sub): (i64, i64, i64) = c.query_row(
+            "SELECT s.total_cents, s.cash_tendered_cents, i.subtotal_cents
+             FROM sales s JOIN sale_items i ON i.sale_id = s.id", [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+        assert_eq!(total, total_antes - 700, "o total da venda cai o valor do item");
+        assert_eq!(dinheiro, dinheiro_antes - 700, "o dinheiro recebido cai junto");
+        assert_eq!(item_sub, 1400, "3 × 7,00 vira 2 × 7,00");
+
+        // Sem estorno (produto danificado, cliente não recebe nada): o total fica.
+        devolver(&mut c, &ator(), ReturnInput {
+            sale_item_id: item, quantity: 1, refund_kind: "sem_estorno".into(),
+            reason: "danificado".into(), restock: false, client_return_id: None,
+        }).unwrap();
+        let total_depois: i64 = c.query_row("SELECT total_cents FROM sales", [], |r| r.get(0)).unwrap();
+        assert_eq!(total_depois, total);
     }
 
     /// Dois cliques no mesmo botão devolvem uma vez só.

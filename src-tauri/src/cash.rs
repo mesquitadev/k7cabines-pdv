@@ -35,7 +35,8 @@ fn ler_sessao(connection: &Connection, id: &str) -> AppResult<Option<CashSession
         .query_row(
             "SELECT id, opened_at, opened_by_name, opening_float_cents, closed_at, closed_by_name,
                     expected_cash_cents, counted_cash_cents, difference_cents, notes, status,
-                    closed_without_count
+                    closed_without_count, expected_card_cents, counted_card_cents,
+                    card_difference_cents
              FROM cash_sessions WHERE id = ?1",
             params![id],
             |row| {
@@ -52,6 +53,9 @@ fn ler_sessao(connection: &Connection, id: &str) -> AppResult<Option<CashSession
                     notes: row.get(9)?,
                     status: row.get(10)?,
                     closed_without_count: row.get(11)?,
+                    expected_card_cents: row.get(12)?,
+                    counted_card_cents: row.get(13)?,
+                    card_difference_cents: row.get(14)?,
                 })
             },
         )
@@ -230,11 +234,28 @@ pub fn resumo(connection: &Connection, session_id: &str) -> AppResult<CashSessio
     // turno da venda: quem devolve hoje uma compra de ontem tira dinheiro da
     // gaveta de hoje. `cash_session_id` nulo é linha anterior à correção, e
     // para ela vale o turno da venda, que era o comportamento antigo.
+    //
+    // Desde a alteração de venda (15/10/2026), a venda estornada já tem o
+    // dinheiro reduzido: estorno de venda DESTE turno já está descontado em
+    // `dinheiro`. Só a alteração de venda de outro turno, feita aqui, ainda
+    // precisa sair da gaveta deste.
     let estornos: i64 = connection.query_row(
         "SELECT COALESCE(SUM(r.amount_cents), 0)
          FROM sale_returns r JOIN sales s ON s.id = r.sale_id
          WHERE COALESCE(r.cash_session_id, s.cash_session_id) = ?1
+           AND s.cash_session_id IS NOT ?1
            AND r.refund_kind = 'dinheiro'
+           AND s.status = 'completed'",
+        params![session_id],
+        |row| row.get(0),
+    )?;
+
+    // Estorno na maquininha: mesma regra de turno do estorno em dinheiro.
+    let estornos_cartao: i64 = connection.query_row(
+        "SELECT COALESCE(SUM(r.amount_cents), 0)
+         FROM sale_returns r JOIN sales s ON s.id = r.sale_id
+         WHERE COALESCE(r.cash_session_id, s.cash_session_id) = ?1
+           AND r.refund_kind IN ('cartao', 'maquininha')
            AND s.status = 'completed'",
         params![session_id],
         |row| row.get(0),
@@ -243,6 +264,8 @@ pub fn resumo(connection: &Connection, session_id: &str) -> AppResult<CashSessio
     // Dinheiro recebido menos o troco devolvido é o que ficou na gaveta.
     let dinheiro_liquido = dinheiro - troco;
     let esperado = fundo + dinheiro_liquido + suprimentos - sangrias - estornos;
+    // O relatório da maquininha deve bater com isto.
+    let esperado_maquininha = cartao - estornos_cartao;
 
     Ok(CashSessionSummary {
         session_id: session_id.to_string(),
@@ -257,29 +280,40 @@ pub fn resumo(connection: &Connection, session_id: &str) -> AppResult<CashSessio
         deposits_cents: suprimentos,
         refunds_cash_cents: estornos,
         esperado_cents: esperado,
+        refunds_card_cents: estornos_cartao,
+        esperado_maquininha_cents: esperado_maquininha,
     })
 }
 
+/// Fecha o turno conferindo a gaveta E a maquininha.
+///
+/// A maquininha é obrigatória de propósito (pedido do cliente): conferir só o
+/// dinheiro deixa passar uma venda que foi lançada como cartão e nunca foi
+/// cobrada na máquina — a gaveta bate, e o erro segue adiante sem ninguém ver.
 pub fn fechar(
     connection: &mut Connection,
     actor: &LocalUser,
     contado_cents: i64,
+    maquininha_cents: i64,
     notas: Option<String>,
 ) -> AppResult<CashSession> {
     require(actor, "cash.manage")?;
     valida_valor(contado_cents, "o valor contado")?;
+    valida_valor(maquininha_cents, "o valor da maquininha")?;
 
     let sessao = sessao_aberta(connection)?
         .ok_or_else(|| AppError::Validation("nenhum caixa aberto".into()))?;
     let resumo = resumo(connection, &sessao.id)?;
     let diferenca = contado_cents - resumo.esperado_cents;
+    let diferenca_maquininha = maquininha_cents - resumo.esperado_maquininha_cents;
     let now = Utc::now().to_rfc3339();
 
     let transaction = connection.transaction()?;
     transaction.execute(
         "UPDATE cash_sessions
          SET status = 'fechada', closed_at = ?1, closed_by = ?2, closed_by_name = ?3,
-             expected_cash_cents = ?4, counted_cash_cents = ?5, difference_cents = ?6, notes = ?7
+             expected_cash_cents = ?4, counted_cash_cents = ?5, difference_cents = ?6, notes = ?7,
+             expected_card_cents = ?9, counted_card_cents = ?10, card_difference_cents = ?11
          WHERE id = ?8 AND status = 'aberta'",
         params![
             now,
@@ -289,7 +323,10 @@ pub fn fechar(
             contado_cents,
             diferenca,
             notas.as_deref().map(str::trim).filter(|n| !n.is_empty()),
-            sessao.id
+            sessao.id,
+            resumo.esperado_maquininha_cents,
+            maquininha_cents,
+            diferenca_maquininha
         ],
     )?;
     transaction.execute(
@@ -303,6 +340,9 @@ pub fn fechar(
                 "expected_cents": resumo.esperado_cents,
                 "counted_cents": contado_cents,
                 "difference_cents": diferenca,
+                "expected_card_cents": resumo.esperado_maquininha_cents,
+                "counted_card_cents": maquininha_cents,
+                "card_difference_cents": diferenca_maquininha,
             })
             .to_string(),
             now
@@ -326,11 +366,12 @@ pub fn vendas_do_turno(
     require(actor, "reports.closing")?;
     let mut st = connection.prepare(
         "SELECT i.category, p.subcategory, i.product_name,
-                SUM(i.quantity), SUM(i.subtotal_cents)
+                SUM(i.quantity - i.returned_quantity), SUM(i.subtotal_cents)
          FROM sale_items i
          JOIN sales s ON s.id = i.sale_id
          LEFT JOIN products p ON p.id = i.product_id
          WHERE s.cash_session_id = ?1 AND s.status = 'completed'
+           AND i.quantity > i.returned_quantity
          GROUP BY i.category, p.subcategory, i.product_name
          ORDER BY i.category, p.subcategory, SUM(i.subtotal_cents) DESC",
     )?;
@@ -417,7 +458,8 @@ pub fn listar(
     let mut st = connection.prepare(
         "SELECT id, opened_at, opened_by_name, opening_float_cents, closed_at, closed_by_name,
                 expected_cash_cents, counted_cash_cents, difference_cents, notes, status,
-                closed_without_count
+                closed_without_count, expected_card_cents, counted_card_cents,
+                card_difference_cents
          FROM cash_sessions
          WHERE date(opened_at, 'localtime') BETWEEN ?1 AND ?2
          ORDER BY opened_at DESC",
@@ -436,6 +478,9 @@ pub fn listar(
             notes: row.get(9)?,
             status: row.get(10)?,
             closed_without_count: row.get(11)?,
+            expected_card_cents: row.get(12)?,
+            counted_card_cents: row.get(13)?,
+            card_difference_cents: row.get(14)?,
         })
     })?;
     linhas.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -477,6 +522,7 @@ pub fn virar_dia(
         "UPDATE cash_sessions
          SET status = 'fechada', closed_at = ?1, closed_by = ?2, closed_by_name = ?3,
              expected_cash_cents = ?4, counted_cash_cents = NULL, difference_cents = NULL,
+             expected_card_cents = ?7, counted_card_cents = NULL, card_difference_cents = NULL,
              closed_without_count = 1, notes = ?5
          WHERE id = ?6 AND status = 'aberta'",
         params![
@@ -485,7 +531,8 @@ pub fn virar_dia(
             actor.full_name,
             resumo.esperado_cents,
             motivo,
-            anterior.id
+            anterior.id,
+            resumo.esperado_maquininha_cents
         ],
     )?;
 
@@ -604,7 +651,7 @@ mod tests {
         let aberto = abrir(&mut c, &operador(), 20000).unwrap();
         assert_eq!(aberto.opened_by_name, "Caixa Um");
 
-        let fechado = fechar(&mut c, &outro_operador(), 20000, None).unwrap();
+        let fechado = fechar(&mut c, &outro_operador(), 20000, 0, None).unwrap();
         assert_eq!(fechado.status, "fechada");
         assert_eq!(fechado.closed_by_name.as_deref(), Some("Caixa Dois"));
         assert_eq!(fechado.opened_by_name, "Caixa Um", "quem abriu continua registrado");
@@ -645,7 +692,7 @@ mod tests {
                 client_sale_id: id.into(),
                 items: vec![SaleItemInput { product_id: produto.into(), quantity: qtd, credit: false }],
                 cash_tendered_cents: pago, card_cents: 0, pix_cents: 0, discount_cents: 0, discount_reason: String::new(), customer_name: String::new(),
-                credit_customer: None,
+                credit_customer: None, pending: false,
             }).unwrap();
         };
         vender("v1", "p1", 3, 3000);
@@ -745,7 +792,7 @@ mod tests {
     fn fechamento_conferido_nao_e_marcado_como_sem_contagem() {
         let mut c = base();
         abrir(&mut c, &operador(), 10000).unwrap();
-        let fechado = fechar(&mut c, &operador(), 9500, None).unwrap();
+        let fechado = fechar(&mut c, &operador(), 9500, 0, None).unwrap();
         assert!(!fechado.closed_without_count);
         assert_eq!(fechado.counted_cash_cents, Some(9500));
         assert_eq!(fechado.difference_cents, Some(-500));
@@ -796,6 +843,61 @@ mod tests {
         ));
     }
 
+    /// A maquininha é conferida como a gaveta: esperado pelas vendas em cartão,
+    /// contado pelo relatório da máquina, diferença gravada. Pedido do cliente:
+    /// uma venda lançada como cartão e nunca passada na máquina não pode seguir
+    /// invisível só porque o dinheiro bateu.
+    #[test]
+    fn fechamento_confere_a_maquininha_separada_da_gaveta() {
+        use crate::models::{FinalizeSaleInput, SaleItemInput};
+        let mut c = base();
+        c.execute(
+            "INSERT INTO products (id, code, name, category, subcategory, price_cents, stock_quantity, active, created_at, updated_at)
+             VALUES ('p1','B1','Brahma Latão','Bebidas','Brahma',1000,50,1,'now','now')", []).unwrap();
+        abrir(&mut c, &operador(), 10000).unwrap();
+
+        let mut vender = |id: &str, dinheiro: i64, cartao: i64| {
+            crate::sales::finalize(&mut c, &operador(), FinalizeSaleInput {
+                client_sale_id: id.into(),
+                items: vec![SaleItemInput { product_id: "p1".into(), quantity: (dinheiro + cartao) / 1000, credit: false }],
+                cash_tendered_cents: dinheiro, card_cents: cartao, pix_cents: 0, discount_cents: 0,
+                discount_reason: String::new(), customer_name: String::new(), credit_customer: None, pending: false,
+            }).unwrap();
+        };
+        vender("v1", 2000, 0);
+        vender("v2", 0, 3000);
+        vender("v3", 1000, 1000);
+
+        let r = resumo(&c, &sessao_aberta(&c).unwrap().unwrap().id).unwrap();
+        assert_eq!(r.esperado_cents, 10000 + 3000, "gaveta: fundo mais dinheiro");
+        assert_eq!(r.esperado_maquininha_cents, 4000, "maquininha: só o cartão");
+
+        // Gaveta bate; a máquina mostra R$ 10,00 a menos — uma venda não passou.
+        let fechada = fechar(&mut c, &operador(), 13000, 3000, None).unwrap();
+        assert_eq!(fechada.difference_cents, Some(0));
+        assert_eq!(fechada.expected_card_cents, Some(4000));
+        assert_eq!(fechada.counted_card_cents, Some(3000));
+        assert_eq!(fechada.card_difference_cents, Some(-1000));
+
+        // Maquininha negativa é recusada como qualquer valor contado.
+        let mut c2 = base();
+        abrir(&mut c2, &operador(), 0).unwrap();
+        assert!(matches!(fechar(&mut c2, &operador(), 0, -1, None), Err(AppError::Validation(_))));
+    }
+
+    /// Virada de dia não conta a maquininha, mas guarda o esperado.
+    #[test]
+    fn virada_de_dia_guarda_o_esperado_da_maquininha_sem_contagem() {
+        let mut c = base();
+        abrir(&mut c, &operador(), 5000).unwrap();
+        let anterior_id = sessao_aberta(&c).unwrap().unwrap().id;
+        virar_dia(&mut c, &operador(), "esqueceram").unwrap();
+        let anterior = ler_sessao(&c, &anterior_id).unwrap().unwrap();
+        assert_eq!(anterior.expected_card_cents, Some(0));
+        assert_eq!(anterior.counted_card_cents, None);
+        assert_eq!(anterior.card_difference_cents, None);
+    }
+
     #[test]
     fn fechamento_calcula_a_diferenca_e_registra() {
         let mut c = base();
@@ -803,7 +905,7 @@ mod tests {
         movimentar(&mut c, &operador(), "suprimento", 5000, "reforço").unwrap();
 
         // Faltando R$ 30,00 na gaveta.
-        let fechada = fechar(&mut c, &operador(), 22000, Some("conferido a dois".into())).unwrap();
+        let fechada = fechar(&mut c, &operador(), 22000, 0, Some("conferido a dois".into())).unwrap();
         assert_eq!(fechada.status, "fechada");
         assert_eq!(fechada.expected_cash_cents, Some(25000));
         assert_eq!(fechada.counted_cash_cents, Some(22000));
@@ -819,7 +921,7 @@ mod tests {
             movimentar(&mut c, &operador(), "sangria", 1000, "x"),
             Err(AppError::Validation(_))
         ));
-        assert!(matches!(fechar(&mut c, &operador(), 0, None), Err(AppError::Validation(_))));
+        assert!(matches!(fechar(&mut c, &operador(), 0, 0, None), Err(AppError::Validation(_))));
     }
 
     #[test]

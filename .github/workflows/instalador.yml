@@ -37,7 +37,7 @@ jobs:
         shell: pwsh
         run: |
           Remove-Item -Force package-lock.json
-          npm install --no-package-lock --no-audit --no-fund
+          npm install --no-package-lock --no-audit --no-fund --legacy-peer-deps
 
       - name: Empacotar (NSIS + MSI)
         run: npm run desktop:build:windows

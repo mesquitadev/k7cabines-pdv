@@ -39,6 +39,20 @@ jobs:
           Remove-Item -Force package-lock.json
           npm install --no-package-lock --no-audit --no-fund --legacy-peer-deps
 
+      # A release vai para OUTRO repositório, e o GitHub exige que a tag exista
+      # lá (o commit daqui não existe lá). Cria a tag no último commit do
+      # repositório público; se já existir, segue.
+      - name: Criar a tag no repositório público de releases
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          $sha = gh api repos/mesquitadev/k7cabines-releases/commits/HEAD --jq .sha
+          gh api -X POST repos/mesquitadev/k7cabines-releases/git/refs -f ref="refs/tags/${{ github.ref_name }}" -f sha=$sha
+          if ($LASTEXITCODE -ne 0) { Write-Host "Tag já existe; seguindo." }
+          exit 0
+
       # Empacota, assina o pacote de atualização com a chave privada (secret) e
       # publica no repositório PÚBLICO de releases, de onde o app instalado
       # baixa o latest.json e o .exe assinado. O código continua privado.

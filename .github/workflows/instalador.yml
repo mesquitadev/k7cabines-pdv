@@ -39,10 +39,10 @@ jobs:
           Remove-Item -Force package-lock.json
           npm install --no-package-lock --no-audit --no-fund --legacy-peer-deps
 
-      # A release vai para OUTRO repositório, e o GitHub exige que a tag exista
-      # lá (o commit daqui não existe lá). Cria a tag no último commit do
-      # repositório público; se já existir, segue.
-      - name: Criar a tag no repositório público de releases
+      # A release vai para OUTRO repositório, e a action manda o commit daqui
+      # como alvo, que lá não existe. Com a release já criada na tag, a action
+      # só anexa os arquivos. Se já existir, segue.
+      - name: Criar a release no repositório público
         if: github.ref_type == 'tag'
         shell: pwsh
         env:
@@ -50,7 +50,8 @@ jobs:
         run: |
           $sha = gh api repos/mesquitadev/k7cabines-releases/commits/HEAD --jq .sha
           gh api -X POST repos/mesquitadev/k7cabines-releases/git/refs -f ref="refs/tags/${{ github.ref_name }}" -f sha=$sha
-          if ($LASTEXITCODE -ne 0) { Write-Host "Tag já existe; seguindo." }
+          gh release create "${{ github.ref_name }}" --repo mesquitadev/k7cabines-releases --title "K7Cabines PDV ${{ github.ref_name }}" --notes "Instalação nova: baixe o .exe. Quem já tem o sistema recebe o aviso de atualização ao abrir."
+          if ($LASTEXITCODE -ne 0) { Write-Host "Release já existe; seguindo." }
           exit 0
 
       # Empacota, assina o pacote de atualização com a chave privada (secret) e

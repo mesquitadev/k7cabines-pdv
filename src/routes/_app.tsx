@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { TrocaDeSenhaObrigatoria } from "@/components/troca-de-senha-obrigatoria";
 import { AssistenteInicial, assistenteAdiado } from "@/components/assistente-inicial";
+import { Atualizacao } from "@/components/atualizacao";
 import { Button } from "@/components/ui/button";
 import { ShoppingCart, Package, BarChart3, LogOut, Wallet, Settings, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -367,6 +368,7 @@ function AppLayout() {
         </Dialog>
       </main>
       <ExpiryAlert />
+      {desktopMode && <Atualizacao />}
     </div>
   );
 }

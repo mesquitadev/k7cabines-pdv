@@ -33,6 +33,8 @@ pub fn run() {
         // Seletor de arquivo nativo: exportar o modelo é escolher onde salvar,
         // não digitar um caminho de cabeça.
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let app_data = app.path().app_data_dir()?;
             let db_path = app_data.join("k7-cabines.sqlite3");

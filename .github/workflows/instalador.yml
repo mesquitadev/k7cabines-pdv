@@ -39,26 +39,31 @@ jobs:
           Remove-Item -Force package-lock.json
           npm install --no-package-lock --no-audit --no-fund --legacy-peer-deps
 
-      - name: Empacotar (NSIS + MSI)
-        run: npm run desktop:build:windows
+      # Empacota, assina o pacote de atualização com a chave privada (secret) e
+      # publica no repositório PÚBLICO de releases, de onde o app instalado
+      # baixa o latest.json e o .exe assinado. O código continua privado.
+      - name: Empacotar, assinar e publicar
+        uses: tauri-apps/tauri-action@v0
         env:
+          GITHUB_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           CARGO_INCREMENTAL: 0
+        with:
+          owner: mesquitadev
+          repo: k7cabines-releases
+          tagName: ${{ github.ref_name }}
+          releaseName: "K7Cabines PDV ${{ github.ref_name }}"
+          releaseBody: "Instalação nova: baixe o .exe. Quem já tem o sistema recebe o aviso de atualização ao abrir."
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+          args: --bundles nsis
 
       - name: Guardar instaladores como artefato
         uses: actions/upload-artifact@v4
         with:
           name: instalador-windows
+          if-no-files-found: ignore
           path: |
             src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/msi/*.msi
-
-      - name: Publicar na Release (rascunho)
-        if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
-        with:
-          draft: true
-          name: "K7Cabines PDV ${{ github.ref_name }}"
-          body: "Instaladores gerados pela esteira. Confira em uma máquina limpa antes de entregar."
-          files: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.sig

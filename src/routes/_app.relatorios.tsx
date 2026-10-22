@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
-import { RefreshCcw, Printer, Undo2 } from "lucide-react";
+import { RefreshCcw, Printer, Undo2, CalendarDays } from "lucide-react";
 import { DrawerDevolucao } from "@/components/drawer-devolucao";
 import { imprimirCupom } from "@/lib/impressao";
 import { PainelDre } from "@/components/painel-dre";
@@ -52,6 +52,23 @@ const fmtDate = (iso: string) => {
 const fmtTime = (iso: string) => {
   const d = new Date(iso);
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+/** Dia local (aaaa-mm-dd) de um instante: o relatório agrupa pelo dia da loja, não UTC. */
+const diaLocal = (iso: string) => {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+/** Pulseiras primeiro, eróticos por último, o resto em ordem alfabética: é como a loja lê. */
+const ordemCategorias = (a: string, b: string) => {
+  const al = a.toLowerCase();
+  const bl = b.toLowerCase();
+  const ap = al.includes("pulseira");
+  const bp = bl.includes("pulseira");
+  if (ap !== bp) return ap ? -1 : 1;
+  const ae = al.includes("erótico");
+  const be = bl.includes("erótico");
+  if (ae !== be) return ae ? 1 : -1;
+  return al.localeCompare(bl);
 };
 
 
@@ -217,6 +234,69 @@ export default function Relatorios() {
     return { total, cash, card, count: sales.length, byCat: Array.from(byCat.entries()), subsOf };
   }, [sales, items]);
 
+  /**
+   * Diário de vendas: a planilha de papel da loja, uma linha por dia do
+   * período. Hoje o funcionário anota à mão total, dinheiro, maquininha,
+   * quantas pulseiras e bebidas saíram e quantos tickets foram alterados;
+   * aqui o sistema preenche a partir das vendas gravadas.
+   */
+  const diario = useMemo(() => {
+    type Cat = { qty: number; value: number; subs: Map<string, number> };
+    type Dia = { total: number; cash: number; card: number; count: number; cats: Map<string, Cat>; alteracoes: number };
+    const dias = new Map<string, Dia>();
+    const novo = (): Dia => ({ total: 0, cash: 0, card: 0, count: 0, cats: new Map(), alteracoes: 0 });
+    const diaDaVenda = new Map<string, string>();
+    sales.forEach((s) => {
+      const k = diaLocal(s.created_at);
+      diaDaVenda.set(s.id, k);
+      const d = dias.get(k) ?? novo();
+      d.total += Number(s.total); d.cash += Number(s.cash_amount); d.card += Number(s.card_amount); d.count += 1;
+      dias.set(k, d);
+    });
+    const categorias = new Set<string>();
+    items.forEach((i) => {
+      const k = diaDaVenda.get(i.sale_id);
+      if (!k) return;
+      const d = dias.get(k) ?? novo();
+      const c = d.cats.get(i.category) ?? { qty: 0, value: 0, subs: new Map<string, number>() };
+      c.qty += Number(i.quantity); c.value += Number(i.subtotal);
+      const sub = (i.subcategory ?? "").trim();
+      if (sub) c.subs.set(sub, (c.subs.get(sub) ?? 0) + Number(i.quantity));
+      d.cats.set(i.category, c);
+      dias.set(k, d);
+      categorias.add(i.category);
+    });
+    alteredItems.forEach((a) => {
+      const k = diaLocal(a.occurred_at);
+      const d = dias.get(k) ?? novo();
+      d.alteracoes += 1;
+      dias.set(k, d);
+    });
+    const colunas = [...categorias].sort(ordemCategorias);
+    const linhas = [...dias.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([dia, d]) => ({ dia, ...d }));
+    const soma = linhas.reduce(
+      (t, l) => {
+        t.total += l.total; t.cash += l.cash; t.card += l.card; t.count += l.count; t.alteracoes += l.alteracoes;
+        l.cats.forEach((c, cat) => {
+          const cur = t.cats.get(cat) ?? { qty: 0, value: 0, subs: new Map<string, number>() };
+          cur.qty += c.qty; cur.value += c.value;
+          t.cats.set(cat, cur);
+        });
+        return t;
+      },
+      novo(),
+    );
+    return { colunas, linhas, soma };
+  }, [sales, items, alteredItems]);
+
+  /** Atalho da planilha mensal: do dia 1 até hoje. */
+  const esteMes = () => {
+    const d = new Date();
+    const inicio = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-01`;
+    setFrom(minDate && inicio < minDate ? minDate : inicio);
+    setTo(todayStr);
+  };
+
   const buildMessage = () => {
     const formatDate = (dateStr: string) => dateStr.split("-").reverse().join("-");
     const lines: string[] = [];
@@ -299,6 +379,7 @@ export default function Relatorios() {
               Seu perfil consulta a partir de {minDate.split("-").reverse().join("/")}.
             </p>
           )}
+          <Button variant="outline" onClick={esteMes}><CalendarDays className="mr-2 h-4 w-4" />Este mês</Button>
           <Button variant="outline" onClick={load}><RefreshCcw className="mr-2 h-4 w-4" />Atualizar</Button>
         </div>
       </div>
@@ -338,6 +419,7 @@ export default function Relatorios() {
           {subAcc.vendas && <TabsTrigger value="vendas">Vendas</TabsTrigger>}
           {subAcc.hora && <TabsTrigger value="hora">Hora em hora</TabsTrigger>}
           {subAcc.categorias && <TabsTrigger value="categorias">Por categoria</TabsTrigger>}
+          {podeResultado && <TabsTrigger value="diario">Diário de vendas</TabsTrigger>}
           {subAcc.estoque && pode("reports.stock") && (
             <TabsTrigger value="adicionados">Alterações no estoque</TabsTrigger>
           )}
@@ -499,6 +581,88 @@ export default function Relatorios() {
             </Table>
           </Card>
         </TabsContent>
+        {podeResultado && (
+        <TabsContent value="diario">
+          <Card>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
+              <div>
+                <p className="font-semibold">Diário de vendas</p>
+                <p className="text-xs text-muted-foreground">
+                  Uma linha por dia do período. Em cada categoria: quantidade vendida, valor e subcategorias. Use "Este mês" para a planilha mensal.
+                </p>
+              </div>
+              <span className="num text-xs text-muted-foreground">{diario.linhas.length} dia(s) com venda</span>
+            </div>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Dia</TableHead>
+                    <TableHead className="text-right">Total</TableHead>
+                    <TableHead className="text-right">Dinheiro</TableHead>
+                    <TableHead className="text-right">Maquininha</TableHead>
+                    <TableHead className="text-right">Vendas</TableHead>
+                    {diario.colunas.map((cat) => (
+                      <TableHead key={cat} className="text-right">{cat}</TableHead>
+                    ))}
+                    <TableHead className="text-right">Alterações</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {diario.linhas.map((l) => (
+                    <TableRow key={l.dia}>
+                      <TableCell className="num font-semibold whitespace-nowrap">{l.dia.split("-").reverse().join("/")}</TableCell>
+                      <TableCell className="num text-right font-bold">{fmt(l.total)}</TableCell>
+                      <TableCell className="num text-right">{fmt(l.cash)}</TableCell>
+                      <TableCell className="num text-right">{fmt(l.card)}</TableCell>
+                      <TableCell className="num text-right">{l.count}</TableCell>
+                      {diario.colunas.map((cat) => {
+                        const c = l.cats.get(cat);
+                        if (!c) return <TableCell key={cat} className="text-right text-muted-foreground">—</TableCell>;
+                        const subs = [...c.subs.entries()].sort(([a], [b]) => a.localeCompare(b));
+                        return (
+                          <TableCell key={cat} className="text-right align-top">
+                            <span className="num text-base font-bold">{c.qty.toLocaleString("pt-BR")}</span>
+                            <span className="num block text-xs text-muted-foreground">{fmt(c.value)}</span>
+                            {subs.length > 0 && (
+                              <span className="block text-[11px] text-muted-foreground">
+                                {subs.map(([s, q]) => `${s} ${q.toLocaleString("pt-BR")}`).join(" · ")}
+                              </span>
+                            )}
+                          </TableCell>
+                        );
+                      })}
+                      <TableCell className={`num text-right ${l.alteracoes ? "font-semibold text-destructive" : "text-muted-foreground"}`}>{l.alteracoes}</TableCell>
+                    </TableRow>
+                  ))}
+                  {!diario.linhas.length && (
+                    <TableRow><TableCell colSpan={6 + diario.colunas.length} className="py-10 text-center text-muted-foreground">Nenhuma venda no período.</TableCell></TableRow>
+                  )}
+                  {diario.linhas.length > 1 && (
+                    <TableRow className="bg-secondary/60 font-bold">
+                      <TableCell>Total do período</TableCell>
+                      <TableCell className="num text-right">{fmt(diario.soma.total)}</TableCell>
+                      <TableCell className="num text-right">{fmt(diario.soma.cash)}</TableCell>
+                      <TableCell className="num text-right">{fmt(diario.soma.card)}</TableCell>
+                      <TableCell className="num text-right">{diario.soma.count}</TableCell>
+                      {diario.colunas.map((cat) => {
+                        const c = diario.soma.cats.get(cat);
+                        return (
+                          <TableCell key={cat} className="text-right align-top">
+                            <span className="num">{(c?.qty ?? 0).toLocaleString("pt-BR")}</span>
+                            <span className="num block text-xs font-normal text-muted-foreground">{fmt(c?.value ?? 0)}</span>
+                          </TableCell>
+                        );
+                      })}
+                      <TableCell className="num text-right">{diario.soma.alteracoes}</TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </Card>
+        </TabsContent>
+        )}
         {pode("reports.stock") && (
           <TabsContent value="adicionados">
             <Card>

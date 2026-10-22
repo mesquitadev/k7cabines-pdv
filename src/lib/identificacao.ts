@@ -40,26 +40,39 @@ function digitoConfere(digitos: string): boolean {
   return (10 - (soma % 10)) % 10 === informado;
 }
 
+/** Normaliza como o Rust: sem separadores, em maiúsculas. */
+export function normalizarCodigoBarras(bruto: string): string {
+  return bruto.replace(/[\s.\-]/g, "").toUpperCase();
+}
+
+/**
+ * GTIN do fabricante (8, 12, 13 ou 14 dígitos) confere o dígito verificador.
+ * Qualquer outra coisa alfanumérica, de 3 a 20 caracteres, é etiqueta interna:
+ * mercadoria importada chega sem código legível e a loja cola a sua ("APCB").
+ */
 export function checarGtin(bruto: string): ChecagemGtin {
-  const digitos = bruto.replace(/[\s.\-]/g, "");
+  const digitos = normalizarCodigoBarras(bruto);
   if (!digitos) return { estado: "vazio" };
-  if (!/^\d+$/.test(digitos)) {
-    return { estado: "erro", mensagem: "O código de barras aceita apenas números." };
+  const tipo = /^\d+$/.test(digitos) ? TIPOS[digitos.length] : undefined;
+  if (tipo) {
+    if (!digitoConfere(digitos)) {
+      return {
+        estado: "erro",
+        mensagem: "O dígito verificador não confere. Leia a etiqueta de novo.",
+      };
+    }
+    return { estado: "ok", digitos, tipo };
   }
-  const tipo = TIPOS[digitos.length];
-  if (!tipo) {
+  if (!/^[A-Z0-9]+$/.test(digitos)) {
+    return { estado: "erro", mensagem: "O código de barras aceita letras e números, sem símbolos." };
+  }
+  if (digitos.length < 3 || digitos.length > 20) {
     return {
       estado: "erro",
-      mensagem: `${digitos.length} dígitos não formam um código válido: use 8, 12, 13 ou 14.`,
+      mensagem: `Etiqueta interna com ${digitos.length} caracteres: use de 3 a 20.`,
     };
   }
-  if (!digitoConfere(digitos)) {
-    return {
-      estado: "erro",
-      mensagem: "O dígito verificador não confere. Leia a etiqueta de novo.",
-    };
-  }
-  return { estado: "ok", digitos, tipo };
+  return { estado: "ok", digitos, tipo: "Etiqueta" };
 }
 
 /** Normaliza como o Rust: maiúsculas, espaço vira hífen. */

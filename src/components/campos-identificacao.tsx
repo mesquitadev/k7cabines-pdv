@@ -80,14 +80,16 @@ export function CampoGtin({
       <div className="flex items-center gap-1.5">
         <Label htmlFor={id}>Código de barras (EAN)</Label>
         <Ajuda>
-          O número impresso na embalagem pelo fabricante. O sistema confere o dígito verificador na
-          hora: um código digitado errado nunca seria encontrado pelo leitor na fila.
+          O número impresso na embalagem pelo fabricante, com o dígito verificador conferido na
+          hora. Produto sem código legível (importado) aceita a etiqueta da loja: letras e números,
+          de 3 a 20 caracteres, como "APCB".
         </Ajuda>
       </div>
       <div className="relative">
         <Input
           id={id}
-          inputMode="numeric"
+          inputMode="text"
+          autoCapitalize="characters"
           value={valor}
           onChange={(e) => onChange(e.target.value)}
           placeholder="Leia com o leitor"

@@ -893,14 +893,17 @@ export default function Produtos() {
         </div>
       ) : (
       <>
-      {/* Painel de leitura: os três números antes da lista. */}
+      {/* Painel de leitura: os números antes da lista. O patrimônio é dinheiro
+          da loja e segue a mesma permissão do resultado financeiro. */}
       <div className="grid shrink-0 gap-3 px-4 pb-3 sm:grid-cols-3 sm:px-6">
-        <Indicador
-          rotulo="Patrimônio em estoque"
-          valor={fmt(indicadores.patrimonio)}
-          nota="Saldo × custo de compra"
-          icone={<Boxes className="h-4 w-4" aria-hidden />}
-        />
+        {pode("reports.result") && (
+          <Indicador
+            rotulo="Patrimônio em estoque"
+            valor={fmt(indicadores.patrimonio)}
+            nota="Saldo × custo de compra"
+            icone={<Boxes className="h-4 w-4" aria-hidden />}
+          />
+        )}
         <Indicador
           rotulo="Precisa repor"
           valor={String(indicadores.repor)}

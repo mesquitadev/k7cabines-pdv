@@ -251,7 +251,7 @@ export default function PDV() {
       ? vendaveis.filter(
           (p) =>
             p.code.toLowerCase().includes(q) ||
-            (p.barcode ?? "").includes(q) ||
+            (p.barcode ?? "").toLowerCase().includes(q) ||
             p.name.toLowerCase().includes(q) ||
             p.category.toLowerCase().includes(q) ||
             (p.variantName ?? "").toLowerCase().includes(q),
@@ -594,7 +594,9 @@ export default function PDV() {
     const termo = search.trim();
     // O EAN vem primeiro: o leitor manda o número da embalagem, e ele identifica
     // um produto só. Só depois o SKU, e por último o resultado único da busca.
-    const porEan = termo && filtered.find((p) => p.barcode === termo.replace(/\D/g, ""));
+    // Etiqueta interna ("APCB") é guardada em maiúsculas, sem separadores.
+    const codigo = termo.replace(/[\s.\-]/g, "").toUpperCase();
+    const porEan = codigo && filtered.find((p) => p.barcode === codigo);
     const porSku = filtered.find((p) => p.code.toLowerCase() === termo.toLowerCase());
     const alvo = porEan ?? porSku ?? (filtered.length === 1 ? filtered[0] : null);
     if (!alvo) {

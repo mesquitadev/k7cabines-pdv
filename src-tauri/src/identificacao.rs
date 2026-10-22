@@ -67,37 +67,50 @@ fn digito_confere(digitos: &str) -> bool {
     (10 - soma % 10) % 10 == *informado
 }
 
-/// Normaliza o GTIN. Vazio vira `None`: nem todo produto de sexshop tem EAN.
+/// Tamanho da etiqueta interna: curta o bastante para caber numa etiqueta
+/// colada à mão, longa o bastante para um código de fornecedor.
+const ETIQUETA_MIN: usize = 3;
+const ETIQUETA_MAX: usize = 20;
+
+/// Normaliza o código de barras. Vazio vira `None`: nem todo produto tem.
 ///
-/// Aceita separadores usados em etiqueta impressa e recusa qualquer número que
-/// não feche o dígito verificador — um EAN inventado é pior que nenhum, porque
-/// o operador procura, não acha, e conclui que o sistema está errado.
+/// Dois mundos convivem no mesmo campo. O GTIN do fabricante (8, 12, 13 ou 14
+/// dígitos) tem dígito verificador e ele é conferido: um EAN inventado é pior
+/// que nenhum, porque o operador procura, não acha, e conclui que o sistema
+/// está errado. Já a mercadoria importada chega sem código legível e a loja
+/// cola uma etiqueta própria, com poucas letras ("APCB"): isso é aceito como
+/// etiqueta interna, sem dígito verificador, em maiúsculas.
 pub fn normaliza_gtin(bruto: Option<&str>) -> AppResult<Option<String>> {
     let Some(texto) = bruto else { return Ok(None) };
-    let digitos: String = texto
+    let limpo: String = texto
         .chars()
         .filter(|c| !matches!(c, ' ' | '-' | '.' | '\t'))
-        .collect();
-    if digitos.is_empty() {
+        .collect::<String>()
+        .to_uppercase();
+    if limpo.is_empty() {
         return Ok(None);
     }
-    if !digitos.chars().all(|c| c.is_ascii_digit()) {
+    let so_digitos = limpo.chars().all(|c| c.is_ascii_digit());
+    if so_digitos && tipo_gtin(&limpo).is_some() {
+        if !digito_confere(&limpo) {
+            return Err(AppError::Validation(
+                "o dígito verificador do código de barras não confere; confira a leitura".into(),
+            ));
+        }
+        return Ok(Some(limpo));
+    }
+    if !limpo.chars().all(|c| c.is_ascii_alphanumeric()) {
         return Err(AppError::Validation(
-            "o código de barras aceita apenas números".into(),
+            "o código de barras aceita letras e números, sem símbolos".into(),
         ));
     }
-    if tipo_gtin(&digitos).is_none() {
+    let n = limpo.chars().count();
+    if !(ETIQUETA_MIN..=ETIQUETA_MAX).contains(&n) {
         return Err(AppError::Validation(format!(
-            "código de barras com {} dígitos não existe: use 8, 12, 13 ou 14",
-            digitos.len()
+            "etiqueta interna com {n} caracteres: use de {ETIQUETA_MIN} a {ETIQUETA_MAX}"
         )));
     }
-    if !digito_confere(&digitos) {
-        return Err(AppError::Validation(
-            "o dígito verificador do código de barras não confere; confira a leitura".into(),
-        ));
-    }
-    Ok(Some(digitos))
+    Ok(Some(limpo))
 }
 
 /// Unidades de medida aceitas. Lista fechada porque unidade é para conferir
@@ -154,17 +167,35 @@ mod tests {
     }
 
     #[test]
-    fn comprimento_invalido_e_recusado_com_a_lista_certa() {
-        let erro = normaliza_gtin(Some("789")).unwrap_err();
-        assert!(erro.to_string().contains("8, 12, 13 ou 14"));
+    fn etiqueta_interna_curta_com_letras_e_aceita_em_maiusculas() {
+        // Produto importado sem EAN legível: a loja cola uma etiqueta "APCB".
+        assert_eq!(normaliza_gtin(Some("apcb")).unwrap().as_deref(), Some("APCB"));
+        assert_eq!(normaliza_gtin(Some("789")).unwrap().as_deref(), Some("789"));
+        assert_eq!(normaliza_gtin(Some("K7 12")).unwrap().as_deref(), Some("K712"));
     }
 
     #[test]
-    fn letra_no_codigo_de_barras_e_recusada() {
+    fn etiqueta_interna_recusa_simbolo_e_tamanho_fora_da_faixa() {
+        assert!(matches!(normaliza_gtin(Some("AP/CB")), Err(AppError::Validation(_))));
+        assert!(matches!(normaliza_gtin(Some("AB")), Err(AppError::Validation(_))));
         assert!(matches!(
-            normaliza_gtin(Some("789490001151X")),
+            normaliza_gtin(Some(&"A".repeat(21))),
             Err(AppError::Validation(_))
         ));
+    }
+
+    #[test]
+    fn numero_com_tamanho_de_gtin_ainda_confere_o_digito() {
+        // 13 dígitos é leitura de embalagem: dígito verificador errado é recusado.
+        assert!(matches!(
+            normaliza_gtin(Some("7894900011518")),
+            Err(AppError::Validation(_))
+        ));
+        // Com letra deixa de ser GTIN e passa a valer como etiqueta interna.
+        assert_eq!(
+            normaliza_gtin(Some("789490001151X")).unwrap().as_deref(),
+            Some("789490001151X")
+        );
     }
 
     #[test]
